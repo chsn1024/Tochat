@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <title>DeepSeek 聊天助手</title>
+    <style>
+        :root {
+            --bg-color: #f4f4f4;
+            --text-color: #000;
+            --user-msg-bg: #d1eaff;
+            --bot-msg-bg: #e2e2e2;
+            --header-bg: #4a90e2;
+            --input-bg: #eee;
+            --code-bg: #2d2d2d;
+            --code-text: #f8f8f2;
+        }
+
+        body.dark {
+            --bg-color: #1e1e1e;
+            --text-color: #eee;
+            --user-msg-bg: #005f99;
+            --bot-msg-bg: #3a3a3a;
+            --header-bg: #333;
+            --input-bg: #2a2a2a;
+            --code-bg: #000;
+            --code-text: #0f0;
+        }
+
+        body {
+            font-family: "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 0;
+            background: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        header {
+            background-color: var(--header-bg);
+            color: white;
+            padding: 16px;
+            text-align: center;
+            font-size: 1.5rem;
+            position: relative;
+        }
+
+        #toggle-theme {
+            position: absolute;
+            right: 20px;
+            top: 16px;
+            background: none;
+            border: 1px solid white;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        #chat {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin: 10px 0;
+            padding: 10px 15px;
+            border-radius: 15px;
+            max-width: 70%;
+            word-wrap: break-word;
+        }
+
+        .user {
+            background-color: var(--user-msg-bg);
+            align-self: flex-end;
+            margin-left: auto;
+        }
+
+        .bot {
+            background-color: var(--bot-msg-bg);
+            align-self: flex-start;
+            margin-right: auto;
+        }
+
+        #input-area {
+            display: flex;
+            padding: 15px;
+            background-color: var(--input-bg);
+        }
+
+        #message {
+            flex: 1;
+            padding: 10px;
+            font-size: 1rem;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+        }
+
+        #send-button {
+            padding: 10px 20px;
+            font-size: 1rem;
+            margin-left: 10px;
+            background-color: #4a90e2;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+
+        #send-button:hover {
+            background-color: #357ac8;
+        }
+
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        pre code {
+            display: block;
+            overflow-x: auto;
+            padding: 1em;
+            background: var(--code-bg);
+            color: var(--code-text);
+            border-radius: 10px;
+        }
+    </style>
+
+    <!-- marked.js + highlight.js -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/styles/default.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/lib/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+</head>
+
+<body>
+    <div class="chat-container">
+        <header>
+            🤖 DeepSeek 聊天助手
+            <button id="toggle-theme" onclick="toggleTheme()">🌙 暗 / 亮</button>
+        </header>
+
+        <div id="chat"></div>
+
+        <div id="input-area">
+            <input type="text" id="message" placeholder="请输入你的问题..." onkeydown="handleKey(event)" />
+            <button id="send-button" onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById("message");
+            const chatBox = document.getElementById("chat");
+            const userText = input.value.trim();
+
+            if (!userText) return;
+
+            const userMessage = document.createElement("div");
+            userMessage.className = "message user";
+            userMessage.innerText = userText;
+            chatBox.appendChild(userMessage);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            input.value = "";
+
+            const response = await fetch("/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: userText })
+            });
+
+            const data = await response.json();
+
+            const botMessage = document.createElement("div");
+            botMessage.className = "message bot";
+            botMessage.innerHTML = marked.parse(data.reply);
+            chatBox.appendChild(botMessage);
+
+            botMessage.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function handleKey(event) {
+            if (event.key === "Enter") {
+                sendMessage();
+            }
+        }
+
+        function toggleTheme() {
+            document.body.classList.toggle("dark");
+            localStorage.setItem("theme", document.body.classList.contains("dark") ? "dark" : "light");
+        }
+
+        // 自动应用上次主题
+        window.onload = () => {
+            if (localStorage.getItem("theme") === "dark") {
+                document.body.classList.add("dark");
+            }
+        }
+    </script>
+</body>
+
+</html>
