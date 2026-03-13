@@ -395,6 +395,12 @@
         const structuredModeToggle = document.getElementById("structured-mode");
         const statusText = document.getElementById("status");
         const sendButton = document.getElementById("send-button");
+        const placeholderByScene = {
+            general: "例如：用通俗语言解释一下进程和线程的区别，并给一个 Java 示例",
+            exam: "例如：408 考试里如何区分进程、线程和协程？请按考点帮我整理",
+            coding: "例如：我的 Java 代码出现空指针异常，帮我分析可能原因和排查步骤",
+            project: "例如：帮我设计一个学生管理系统，说明功能模块、技术选型和实施步骤"
+        };
 
         function appendMessage(role, html, metadata = null) {
             const message = document.createElement("div");
@@ -470,11 +476,18 @@
             localStorage.setItem("theme", document.body.classList.contains("dark") ? "dark" : "light");
         }
 
+        function updatePlaceholder() {
+            input.placeholder = placeholderByScene[sceneSelect.value] || placeholderByScene.general;
+        }
+
         window.onload = () => {
             if (localStorage.getItem("theme") === "dark") {
                 document.body.classList.add("dark");
             }
+            updatePlaceholder();
         };
+
+        sceneSelect.addEventListener("change", updatePlaceholder);
     </script>
 </body>
 
