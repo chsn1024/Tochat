@@ -3,122 +3,275 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>DeepSeek 聊天助手</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>面向计算机类大学生学习场景的智能问答助手</title>
     <style>
         :root {
-            --bg-color: #f4f4f4;
-            --text-color: #000;
-            --user-msg-bg: #d1eaff;
-            --bot-msg-bg: #e2e2e2;
-            --header-bg: #4a90e2;
-            --input-bg: #eee;
-            --code-bg: #2d2d2d;
-            --code-text: #f8f8f2;
+            --bg: #f3efe7;
+            --panel: rgba(255, 252, 247, 0.92);
+            --panel-strong: #fffaf2;
+            --text: #1d1a16;
+            --muted: #6b6257;
+            --accent: #bf5a2b;
+            --accent-dark: #93411c;
+            --line: rgba(54, 42, 28, 0.12);
+            --user-bg: #f7d8c9;
+            --bot-bg: #efe6d9;
+            --meta-bg: #f7f1e7;
+            --shadow: 0 18px 55px rgba(91, 64, 33, 0.12);
+            --code-bg: #1d1f21;
+            --code-text: #f5f5f5;
         }
 
         body.dark {
-            --bg-color: #1e1e1e;
-            --text-color: #eee;
-            --user-msg-bg: #005f99;
-            --bot-msg-bg: #3a3a3a;
-            --header-bg: #333;
-            --input-bg: #2a2a2a;
-            --code-bg: #000;
-            --code-text: #0f0;
+            --bg: #17191d;
+            --panel: rgba(29, 31, 36, 0.94);
+            --panel-strong: #23262c;
+            --text: #f2eee7;
+            --muted: #b5aa9b;
+            --accent: #f08b57;
+            --accent-dark: #cb6d3d;
+            --line: rgba(255, 241, 224, 0.12);
+            --user-bg: #553526;
+            --bot-bg: #2a2e35;
+            --meta-bg: #20242a;
+            --shadow: 0 18px 55px rgba(0, 0, 0, 0.35);
+            --code-bg: #0f1115;
+            --code-text: #f5f5f5;
+        }
+
+        * {
+            box-sizing: border-box;
         }
 
         body {
-            font-family: "Segoe UI", sans-serif;
             margin: 0;
-            padding: 0;
-            background: var(--bg-color);
-            color: var(--text-color);
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
+            min-height: 100vh;
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(191, 90, 43, 0.18), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(49, 97, 140, 0.16), transparent 24%),
+                linear-gradient(135deg, #efe2cf 0%, var(--bg) 52%, #e6ddd2 100%);
             transition: background 0.3s, color 0.3s;
         }
 
-        header {
-            background-color: var(--header-bg);
-            color: white;
-            padding: 16px;
-            text-align: center;
-            font-size: 1.5rem;
-            position: relative;
+        body.dark {
+            background:
+                radial-gradient(circle at top left, rgba(240, 139, 87, 0.14), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(95, 132, 171, 0.16), transparent 24%),
+                linear-gradient(135deg, #111318 0%, var(--bg) 52%, #12151a 100%);
         }
 
-        #toggle-theme {
-            position: absolute;
-            right: 20px;
-            top: 16px;
-            background: none;
-            border: 1px solid white;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 8px;
+        .shell {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 24px;
+            height: 100vh;
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 20px;
+        }
+
+        .sidebar,
+        .main {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+        }
+
+        .sidebar {
+            padding: 24px;
+            position: sticky;
+            top: 24px;
+            align-self: start;
+            height: calc(100vh - 48px);
+            overflow-y: auto;
+        }
+
+        .brand {
+            margin-bottom: 28px;
+        }
+
+        .eyebrow {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(191, 90, 43, 0.12);
+            color: var(--accent-dark);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+        }
+
+        .brand h1 {
+            margin: 14px 0 10px;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 30px;
+            line-height: 1.15;
+        }
+
+        .brand p,
+        .helper-text {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .control-group {
+            margin-top: 22px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        select,
+        input[type="text"] {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: var(--panel-strong);
+            color: var(--text);
+            padding: 12px 14px;
+            font-size: 15px;
+        }
+
+        .switch {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: var(--panel-strong);
+        }
+
+        .switch input {
+            width: 18px;
+            height: 18px;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 22px;
+        }
+
+        button {
+            border: none;
+            border-radius: 14px;
+            padding: 12px 16px;
             cursor: pointer;
+            font-size: 14px;
+            font-weight: 700;
+            transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+        }
+
+        .primary {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .secondary {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--line);
+        }
+
+        .main {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            height: calc(100vh - 48px);
+            min-height: 0;
+        }
+
+        .main-header {
+            padding: 22px 24px 16px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .main-header h2 {
+            margin: 0 0 6px;
+            font-size: 22px;
+        }
+
+        .main-header p {
+            margin: 0;
+            color: var(--muted);
         }
 
         #chat {
             flex: 1;
-            padding: 20px;
             overflow-y: auto;
+            min-height: 0;
+            padding: 20px 24px;
         }
 
         .message {
-            margin: 10px 0;
-            padding: 10px 15px;
-            border-radius: 15px;
-            max-width: 70%;
-            word-wrap: break-word;
+            max-width: 85%;
+            margin-bottom: 16px;
+            padding: 16px 18px;
+            border-radius: 20px;
+            line-height: 1.7;
+            animation: fadeUp 0.25s ease;
         }
 
         .user {
-            background-color: var(--user-msg-bg);
-            align-self: flex-end;
             margin-left: auto;
+            background: var(--user-bg);
         }
 
         .bot {
-            background-color: var(--bot-msg-bg);
-            align-self: flex-start;
-            margin-right: auto;
+            background: var(--bot-bg);
         }
 
-        #input-area {
+        .structured-meta {
+            margin-top: 12px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: var(--meta-bg);
+            border: 1px solid var(--line);
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .structured-meta strong {
+            color: var(--text);
+        }
+
+        .status {
+            padding: 0 24px 10px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .input-area {
+            padding: 16px 24px 24px;
+            border-top: 1px solid var(--line);
             display: flex;
-            padding: 15px;
-            background-color: var(--input-bg);
+            gap: 12px;
+            align-items: flex-end;
         }
 
         #message {
-            flex: 1;
-            padding: 10px;
-            font-size: 1rem;
-            border: 1px solid #ccc;
-            border-radius: 10px;
+            min-height: 52px;
+            resize: vertical;
         }
 
         #send-button {
-            padding: 10px 20px;
-            font-size: 1rem;
-            margin-left: 10px;
-            background-color: #4a90e2;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-        }
-
-        #send-button:hover {
-            background-color: #357ac8;
-        }
-
-        .chat-container {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
+            min-width: 104px;
+            min-height: 52px;
         }
 
         pre code {
@@ -127,65 +280,183 @@
             padding: 1em;
             background: var(--code-bg);
             color: var(--code-text);
-            border-radius: 10px;
+            border-radius: 12px;
+        }
+
+        code {
+            font-family: Consolas, Monaco, monospace;
+        }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 900px) {
+            .shell {
+                grid-template-columns: 1fr;
+                height: auto;
+                padding: 14px;
+            }
+
+            .sidebar,
+            .main {
+                height: auto;
+            }
+
+            .sidebar {
+                position: static;
+                overflow-y: visible;
+            }
+
+            .message {
+                max-width: 100%;
+            }
+
+            .input-area {
+                flex-direction: column;
+            }
+
+            #send-button {
+                width: 100%;
+            }
         }
     </style>
 
-    <!-- marked.js + highlight.js -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/styles/default.min.css">
     <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/lib/highlight.min.js"></script>
-    <script>hljs.highlightAll();</script>
 </head>
 
 <body>
-    <div class="chat-container">
-        <header>
-            🤖 DeepSeek 聊天助手
-            <button id="toggle-theme" onclick="toggleTheme()">🌙 暗 / 亮</button>
-        </header>
+    <div class="shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="eyebrow">DeepSeek + Flask</span>
+                <h1>学习场景智能问答助手</h1>
+                <p>面向计算机类大学生，支持角色场景切换、多轮上下文管理与结构化输出。</p>
+            </div>
 
-        <div id="chat"></div>
+            <div class="control-group">
+                <label for="scene">学习场景</label>
+                <select id="scene">
+                    {% for scene_key, scene_label in scenes.items() %}
+                    <option value="{{ scene_key }}">{{ scene_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
 
-        <div id="input-area">
-            <input type="text" id="message" placeholder="请输入你的问题..." onkeydown="handleKey(event)" />
-            <button id="send-button" onclick="sendMessage()">发送</button>
-        </div>
+            <div class="control-group">
+                <label>输出模式</label>
+                <div class="switch">
+                    <span>结构化回复模式</span>
+                    <input type="checkbox" id="structured-mode" checked>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>机制说明</label>
+                <p class="helper-text">系统会保留最近多轮消息，并在历史过长时自动压缩成摘要，避免上下文无限膨胀。</p>
+            </div>
+
+            <div class="button-row">
+                <button class="primary" type="button" onclick="toggleTheme()">暗 / 亮</button>
+                <button class="secondary" type="button" onclick="resetChat()">重置会话</button>
+            </div>
+        </aside>
+
+        <main class="main">
+            <div class="main-header">
+                <h2>当前对话</h2>
+                <p>建议直接输入课程问题、代码报错、算法题思路或项目设计任务。</p>
+            </div>
+
+            <div id="chat"></div>
+            <div class="status" id="status">等待提问</div>
+
+            <div class="input-area">
+                <input type="text" id="message" placeholder="例如：用通俗语言解释一下进程和线程的区别，并给一个 Java 示例" onkeydown="handleKey(event)" />
+                <button class="primary" id="send-button" type="button" onclick="sendMessage()">发送</button>
+            </div>
+        </main>
     </div>
 
     <script>
-        async function sendMessage() {
-            const input = document.getElementById("message");
-            const chatBox = document.getElementById("chat");
-            const userText = input.value.trim();
+        const chatBox = document.getElementById("chat");
+        const input = document.getElementById("message");
+        const sceneSelect = document.getElementById("scene");
+        const structuredModeToggle = document.getElementById("structured-mode");
+        const statusText = document.getElementById("status");
+        const sendButton = document.getElementById("send-button");
 
+        function appendMessage(role, html, metadata = null) {
+            const message = document.createElement("div");
+            message.className = `message ${role}`;
+            message.innerHTML = html;
+
+            if (metadata) {
+                const meta = document.createElement("div");
+                meta.className = "structured-meta";
+                meta.innerHTML = `
+                    <div><strong>摘要：</strong>${metadata.summary}</div>
+                    <div><strong>类别：</strong>${metadata.category}</div>
+                    <div><strong>置信度：</strong>${metadata.confidence}</div>
+                `;
+                message.appendChild(meta);
+            }
+
+            chatBox.appendChild(message);
+            message.querySelectorAll("pre code").forEach((block) => hljs.highlightElement(block));
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const userText = input.value.trim();
             if (!userText) return;
 
-            const userMessage = document.createElement("div");
-            userMessage.className = "message user";
-            userMessage.innerText = userText;
-            chatBox.appendChild(userMessage);
-            chatBox.scrollTop = chatBox.scrollHeight;
+            appendMessage("user", userText.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
             input.value = "";
+            sendButton.disabled = true;
+            statusText.innerText = "正在请求 DeepSeek...";
 
-            const response = await fetch("/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: userText })
-            });
+            try {
+                const response = await fetch("/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        message: userText,
+                        scene: sceneSelect.value,
+                        structured_mode: structuredModeToggle.checked
+                    })
+                });
 
-            const data = await response.json();
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || "请求失败");
+                }
 
-            const botMessage = document.createElement("div");
-            botMessage.className = "message bot";
-            botMessage.innerHTML = marked.parse(data.reply);
-            chatBox.appendChild(botMessage);
+                appendMessage("bot", marked.parse(data.reply), structuredModeToggle.checked ? data.structured : null);
+                statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
+            } catch (error) {
+                appendMessage("bot", `<p>请求失败：${error.message}</p>`);
+                statusText.innerText = "请求失败";
+            } finally {
+                sendButton.disabled = false;
+                input.focus();
+            }
+        }
 
-            botMessage.querySelectorAll('pre code').forEach((block) => {
-                hljs.highlightElement(block);
-            });
-
-            chatBox.scrollTop = chatBox.scrollHeight;
+        async function resetChat() {
+            await fetch("/reset", { method: "POST" });
+            chatBox.innerHTML = "";
+            statusText.innerText = "会话已重置";
         }
 
         function handleKey(event) {
@@ -199,12 +470,11 @@
             localStorage.setItem("theme", document.body.classList.contains("dark") ? "dark" : "light");
         }
 
-        // 自动应用上次主题
         window.onload = () => {
             if (localStorage.getItem("theme") === "dark") {
                 document.body.classList.add("dark");
             }
-        }
+        };
     </script>
 </body>
 
