@@ -163,6 +163,37 @@
             margin-top: 22px;
         }
 
+        .session-list {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+
+        .session-item {
+            width: 100%;
+            text-align: left;
+            padding: 12px 14px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: var(--panel-strong);
+            color: var(--text);
+        }
+
+        .session-item.active {
+            border-color: var(--accent);
+            box-shadow: inset 0 0 0 1px var(--accent);
+        }
+
+        .session-item small {
+            display: block;
+            margin-top: 6px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
         button {
             border: none;
             border-radius: 14px;
@@ -392,6 +423,13 @@
                 <button class="primary" type="button" onclick="toggleTheme()">暗 / 亮</button>
                 <button class="secondary" type="button" onclick="resetChat()">重置会话</button>
             </div>
+
+            <div class="control-group">
+                <label>历史会话</label>
+                <div class="session-list" id="session-list">
+                    <p class="helper-text">正在加载历史记录...</p>
+                </div>
+            </div>
         </aside>
 
         <main class="main">
@@ -417,12 +455,18 @@
         const structuredModeToggle = document.getElementById("structured-mode");
         const statusText = document.getElementById("status");
         const sendButton = document.getElementById("send-button");
+        const sessionList = document.getElementById("session-list");
         const placeholderByScene = {
             general: "例如：用通俗语言解释一下进程和线程的区别，并给一个 Java 示例",
             exam: "例如：408 考试里如何区分进程、线程和协程？请按考点帮我整理",
             coding: "例如：我的 Java 代码出现空指针异常，帮我分析可能原因和排查步骤",
             project: "例如：帮我设计一个学生管理系统，说明功能模块、技术选型和实施步骤"
         };
+        let currentSessionId = null;
+
+        function escapeHtml(value) {
+            return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
 
         function appendMessage(role, html, metadata = null) {
             const message = document.createElement("div");
@@ -453,7 +497,7 @@
             const userText = input.value.trim();
             if (!userText) return;
 
-            appendMessage("user", userText.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+            appendMessage("user", escapeHtml(userText));
             input.value = "";
             sendButton.disabled = true;
             statusText.innerText = "正在请求 DeepSeek...";
@@ -476,6 +520,8 @@
 
                 appendMessage("bot", marked.parse(data.reply), structuredModeToggle.checked ? data.structured : null);
                 statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
+                currentSessionId = data.session_id;
+                loadSessions();
             } catch (error) {
                 appendMessage("bot", `<p>请求失败：${error.message}</p>`);
                 statusText.innerText = "请求失败";
@@ -489,6 +535,64 @@
             await fetch("/reset", { method: "POST" });
             chatBox.innerHTML = "";
             statusText.innerText = "会话已重置";
+            loadSessions();
+        }
+
+        function renderSessions(sessions) {
+            if (!sessions.length) {
+                sessionList.innerHTML = '<p class="helper-text">暂无历史会话</p>';
+                return;
+            }
+
+            sessionList.innerHTML = "";
+            sessions.forEach((item) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = `session-item ${item.session_id === currentSessionId ? "active" : ""}`;
+                button.innerHTML = `
+                    <strong>${item.message_count} 条消息</strong>
+                    <small>${escapeHtml(item.summary_preview)}</small>
+                    <small>${item.updated_at}</small>
+                `;
+                button.onclick = () => loadSession(item.session_id);
+                sessionList.appendChild(button);
+            });
+        }
+
+        async function loadSessions() {
+            try {
+                const response = await fetch("/sessions");
+                const data = await response.json();
+                currentSessionId = data.current_session_id;
+                renderSessions(data.sessions || []);
+            } catch (error) {
+                sessionList.innerHTML = '<p class="helper-text">历史记录加载失败</p>';
+            }
+        }
+
+        async function loadSession(sessionId) {
+            try {
+                const response = await fetch("/sessions/load", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || "加载失败");
+                }
+
+                chatBox.innerHTML = "";
+                data.messages.forEach((item) => {
+                    const html = item.role === "assistant" ? marked.parse(item.content) : escapeHtml(item.content);
+                    appendMessage(item.role === "assistant" ? "bot" : "user", html);
+                });
+                currentSessionId = data.session_id;
+                statusText.innerText = `已加载历史会话 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
+                loadSessions();
+            } catch (error) {
+                statusText.innerText = `加载历史会话失败：${error.message}`;
+            }
         }
 
         function handleKey(event) {
@@ -511,6 +615,7 @@
                 document.body.classList.add("dark");
             }
             updatePlaceholder();
+            loadSessions();
         };
 
         sceneSelect.addEventListener("change", updatePlaceholder);

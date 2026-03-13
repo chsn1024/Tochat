@@ -1,6 +1,8 @@
 import json
 import os
+import sqlite3
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List
 
 import requests
@@ -17,6 +19,7 @@ MAX_RECENT_MESSAGES = 8
 SUMMARY_TRIGGER_MESSAGES = 12
 SUMMARY_MAX_CHARS = 1200
 DEFAULT_TIMEOUT = 60
+DB_PATH = os.path.join(os.path.dirname(__file__), "chat_history.db")
 
 conversation_store: Dict[str, Dict[str, Any]] = {}
 
@@ -37,6 +40,122 @@ BASE_SYSTEM_PROMPT = """
 3. 如果用户只是要简短答案，保持精炼。
 4. 不输出与学习场景无关的闲聊内容。
 """.strip()
+
+
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversations (
+                session_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES conversations(session_id)
+            )
+            """
+        )
+
+
+def utc_now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def load_conversation_state(session_id: str) -> Dict[str, Any]:
+    with get_db_connection() as conn:
+        conversation_row = conn.execute(
+            "SELECT summary FROM conversations WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        message_rows = conn.execute(
+            "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        ).fetchall()
+
+    return {
+        "messages": [
+            {"role": row["role"], "content": row["content"]}
+            for row in message_rows
+        ],
+        "summary": conversation_row["summary"] if conversation_row else "",
+    }
+
+
+def save_conversation_state(session_id: str, state: Dict[str, Any]) -> None:
+    now = utc_now_iso()
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO conversations (session_id, summary, updated_at, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (session_id, state["summary"], now, now),
+        )
+        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        conn.executemany(
+            """
+            INSERT INTO messages (session_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (session_id, item["role"], item["content"], now)
+                for item in state["messages"]
+            ],
+        )
+
+
+def list_saved_sessions(limit: int = 20) -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                c.session_id,
+                c.summary,
+                c.updated_at,
+                c.created_at,
+                COUNT(m.id) AS message_count
+            FROM conversations c
+            LEFT JOIN messages m ON m.session_id = c.session_id
+            GROUP BY c.session_id, c.summary, c.updated_at, c.created_at
+            ORDER BY c.updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    sessions = []
+    for row in rows:
+        summary = row["summary"].strip()
+        sessions.append(
+            {
+                "session_id": row["session_id"],
+                "summary_preview": summary[:80] if summary else "暂无摘要，优先展示最近消息记录。",
+                "updated_at": row["updated_at"],
+                "created_at": row["created_at"],
+                "message_count": row["message_count"],
+            }
+        )
+    return sessions
 
 SCENE_PROMPTS = {
     "general": {
@@ -90,6 +209,34 @@ JSON 必须包含以下字段：
 4. 如果用户输入不完整，也要在 answer 中说明缺失信息。
 """.strip()
 
+LOW_CONFIDENCE_HINTS = (
+    "信息不足",
+    "缺少",
+    "无法确定",
+    "无法准确",
+    "无法直接",
+    "无法判断",
+    "不能确定",
+    "未提供",
+    "没有提供",
+    "需要更多信息",
+    "需要补充",
+    "题目不完整",
+    "代码未提供",
+    "无法保证",
+    "可能",
+    "不确定",
+)
+
+MEDIUM_CONFIDENCE_HINTS = (
+    "通常",
+    "一般来说",
+    "建议你",
+    "可以先",
+    "优先考虑",
+    "大概率",
+)
+
 
 def get_session_id() -> str:
     if "chat_session_id" not in session:
@@ -100,11 +247,15 @@ def get_session_id() -> str:
 def get_conversation_state() -> Dict[str, Any]:
     session_id = get_session_id()
     if session_id not in conversation_store:
-        conversation_store[session_id] = {
-            "messages": [],
-            "summary": "",
-        }
+        conversation_store[session_id] = load_conversation_state(session_id)
     return conversation_store[session_id]
+
+
+def switch_session(session_id: str) -> Dict[str, Any]:
+    session["chat_session_id"] = session_id
+    state = load_conversation_state(session_id)
+    conversation_store[session_id] = state
+    return state
 
 
 def build_system_prompt(scene: str, structured_mode: bool) -> str:
@@ -176,12 +327,37 @@ def safe_parse_structured_content(raw_content: str) -> Dict[str, str]:
     if confidence not in {"高", "中", "低"}:
         confidence = "低"
 
+    confidence = normalize_confidence(answer, confidence)
+
     return {
         "answer": answer,
         "summary": summary,
         "category": category,
         "confidence": confidence,
     }
+
+
+def normalize_confidence(answer: str, confidence: str) -> str:
+    answer_lower = answer.lower()
+
+    if any(hint in answer for hint in LOW_CONFIDENCE_HINTS):
+        return "低"
+
+    if any(hint in answer for hint in MEDIUM_CONFIDENCE_HINTS):
+        return "中" if confidence == "高" else confidence
+
+    weak_input_signals = (
+        "未贴出",
+        "没贴出",
+        "不把代码贴出来",
+        "没有代码",
+        "没有题目",
+        "没有截图",
+    )
+    if any(hint in answer_lower for hint in weak_input_signals):
+        return "低"
+
+    return confidence
 
 
 def compress_history_if_needed(state: Dict[str, Any]) -> None:
@@ -228,6 +404,35 @@ def index():
     )
 
 
+@app.route("/sessions", methods=["GET"])
+def get_sessions():
+    return jsonify(
+        {
+            "sessions": list_saved_sessions(),
+            "current_session_id": get_session_id(),
+        }
+    )
+
+
+@app.route("/sessions/load", methods=["POST"])
+def load_session():
+    request_data = request.get_json(silent=True) or {}
+    session_id = str(request_data.get("session_id", "")).strip()
+    if not session_id:
+        return jsonify({"error": "session_id 不能为空"}), 400
+
+    state = switch_session(session_id)
+    return jsonify(
+        {
+            "ok": True,
+            "session_id": session_id,
+            "messages": state["messages"],
+            "has_summary": bool(state["summary"]),
+            "history_count": len(state["messages"]),
+        }
+    )
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     request_data = request.get_json(silent=True) or {}
@@ -243,6 +448,7 @@ def chat():
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
 
     state = get_conversation_state()
+    session_id = get_session_id()
     state["messages"].append({"role": "user", "content": user_input})
     compress_history_if_needed(state)
 
@@ -267,6 +473,7 @@ def chat():
     )
 
     state["messages"].append({"role": "assistant", "content": parsed_content["answer"]})
+    save_conversation_state(session_id, state)
 
     return jsonify(
         {
@@ -276,6 +483,7 @@ def chat():
             "structured_mode": structured_mode,
             "history_count": len(state["messages"]),
             "has_summary": bool(state["summary"]),
+            "session_id": session_id,
         }
     )
 
@@ -284,8 +492,11 @@ def chat():
 def reset_chat():
     session_id = get_session_id()
     conversation_store[session_id] = {"messages": [], "summary": ""}
+    save_conversation_state(session_id, conversation_store[session_id])
     return jsonify({"ok": True})
 
+
+init_db()
 
 if __name__ == "__main__":
     app.run(debug=True)
