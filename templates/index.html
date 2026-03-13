@@ -246,6 +246,28 @@
             color: var(--muted);
         }
 
+        .structured-meta details {
+            margin-top: 10px;
+        }
+
+        .structured-meta summary {
+            cursor: pointer;
+            color: var(--text);
+            font-weight: 700;
+        }
+
+        .structured-meta pre {
+            margin: 10px 0 0;
+            padding: 12px;
+            border-radius: 12px;
+            background: var(--panel-strong);
+            border: 1px solid var(--line);
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text);
+        }
+
         .structured-meta strong {
             color: var(--text);
         }
@@ -414,6 +436,10 @@
                     <div><strong>摘要：</strong>${metadata.summary}</div>
                     <div><strong>类别：</strong>${metadata.category}</div>
                     <div><strong>置信度：</strong>${metadata.confidence}</div>
+                    <details>
+                        <summary>查看原始 JSON</summary>
+                        <pre>${JSON.stringify(metadata, null, 2)}</pre>
+                    </details>
                 `;
                 message.appendChild(meta);
             }
