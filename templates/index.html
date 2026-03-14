@@ -314,6 +314,18 @@
             line-height: 1.7;
         }
 
+        .source-badge {
+            margin-top: 12px;
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(49, 97, 140, 0.12);
+            border: 1px solid rgba(49, 97, 140, 0.16);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
         .status {
             padding: 0 24px 10px;
             color: var(--muted);
@@ -479,7 +491,7 @@
             return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
-        function appendMessage(role, html, metadata = null, sceneReminder = "") {
+        function appendMessage(role, html, metadata = null, sceneReminder = "", source = "") {
             const message = document.createElement("div");
             message.className = `message ${role}`;
             message.innerHTML = html;
@@ -504,6 +516,13 @@
                 reminder.className = "scene-reminder";
                 reminder.innerHTML = `<strong>场景提醒：</strong>${escapeHtml(sceneReminder)}`;
                 message.appendChild(reminder);
+            }
+
+            if (source === "local_faq") {
+                const badge = document.createElement("div");
+                badge.className = "source-badge";
+                badge.innerText = "本地 FAQ 命中";
+                message.appendChild(badge);
             }
 
             chatBox.appendChild(message);
@@ -542,7 +561,8 @@
                     "bot",
                     marked.parse(data.reply),
                     structuredModeToggle.checked ? data.structured : null,
-                    data.scene_reminder || ""
+                    data.scene_reminder || "",
+                    data.source || ""
                 );
                 statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
                 currentSessionId = data.session_id;

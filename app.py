@@ -311,6 +311,48 @@ SCENE_GUIDANCE = {
     "project": "当前场景更适合项目实践。你可以从需求分析、模块设计、技术选型、数据库设计或实施步骤来提问。",
 }
 
+LOCAL_FAQ_RULES = [
+    {
+        "keywords": ("c语言", "介绍"),
+        "structured": {
+            "answer": (
+                "C语言是一种通用的过程式编程语言，由 Dennis Ritchie 在 1970 年代初为 Unix 系统开发。\n\n"
+                "它的特点是运行效率高、语法相对简洁、能够直接操作内存，因此常用于操作系统、编译器、嵌入式开发和高性能程序。\n\n"
+                "学习 C 语言时，建议重点掌握变量与控制流、函数、数组、指针、结构体、文件操作和内存管理。"
+            ),
+            "summary": "C语言是一种高效、接近底层、广泛用于系统开发的过程式语言。",
+            "category": "概念讲解",
+            "confidence": "高",
+        },
+    },
+    {
+        "keywords": ("进程", "线程", "区别"),
+        "structured": {
+            "answer": (
+                "进程是资源分配的基本单位，线程是 CPU 调度的基本单位。\n\n"
+                "可以把进程理解为一个正在运行的程序实例，而线程是这个程序内部实际执行任务的执行流。"
+                "同一进程内的线程共享内存空间，切换开销较小；不同进程之间相互隔离，安全性更高。"
+            ),
+            "summary": "进程负责资源隔离，线程负责执行调度，同进程线程共享资源。",
+            "category": "概念讲解",
+            "confidence": "高",
+        },
+    },
+    {
+        "keywords": ("数据库", "什么是"),
+        "structured": {
+            "answer": (
+                "数据库是按照一定结构组织、存储和管理数据的系统，用来支持数据的高效查询、更新和维护。\n\n"
+                "常见数据库分为关系型数据库和非关系型数据库。前者如 MySQL、PostgreSQL，适合结构化数据；"
+                "后者如 Redis、MongoDB，适合缓存、文档或高并发等场景。"
+            ),
+            "summary": "数据库是用于组织、存储和管理数据的系统。",
+            "category": "概念讲解",
+            "confidence": "高",
+        },
+    },
+]
+
 
 def get_session_id() -> str:
     if "chat_session_id" not in session:
@@ -449,6 +491,14 @@ def detect_scene_mismatch(user_input: str, scene: str) -> str:
     )
 
 
+def match_local_faq(user_input: str) -> Dict[str, str]:
+    normalized_input = user_input.lower().replace(" ", "")
+    for rule in LOCAL_FAQ_RULES:
+        if all(keyword.lower().replace(" ", "") in normalized_input for keyword in rule["keywords"]):
+            return dict(rule["structured"])
+    return {}
+
+
 def compress_history_if_needed(state: Dict[str, Any]) -> None:
     if len(state["messages"]) <= SUMMARY_TRIGGER_MESSAGES:
         return
@@ -542,25 +592,40 @@ def chat():
     state["messages"].append({"role": "user", "content": user_input})
     compress_history_if_needed(state)
 
-    try:
-        response_data = call_deepseek(
-            build_messages(state, scene, structured_mode),
-            structured_mode=structured_mode,
-        )
-        raw_content = response_data["choices"][0]["message"]["content"]
-    except requests.RequestException as exc:
-        return jsonify({"error": f"DeepSeek API 调用失败: {exc}"}), 502
+    local_faq_result = match_local_faq(user_input)
+    source = "local_faq" if local_faq_result else "deepseek"
 
-    parsed_content = (
-        safe_parse_structured_content(raw_content)
-        if structured_mode
-        else {
-            "answer": raw_content,
-            "summary": "普通文本模式未生成摘要。",
-            "category": "其他",
-            "confidence": "中",
-        }
-    )
+    if local_faq_result:
+        parsed_content = (
+            local_faq_result
+            if structured_mode
+            else {
+                "answer": local_faq_result["answer"],
+                "summary": "本地 FAQ 命中，未额外生成摘要。",
+                "category": local_faq_result["category"],
+                "confidence": local_faq_result["confidence"],
+            }
+        )
+    else:
+        try:
+            response_data = call_deepseek(
+                build_messages(state, scene, structured_mode),
+                structured_mode=structured_mode,
+            )
+            raw_content = response_data["choices"][0]["message"]["content"]
+        except requests.RequestException as exc:
+            return jsonify({"error": f"DeepSeek API 调用失败: {exc}"}), 502
+
+        parsed_content = (
+            safe_parse_structured_content(raw_content)
+            if structured_mode
+            else {
+                "answer": raw_content,
+                "summary": "普通文本模式未生成摘要。",
+                "category": "其他",
+                "confidence": "中",
+            }
+        )
 
     state["messages"].append({"role": "assistant", "content": parsed_content["answer"]})
     save_conversation_state(session_id, state)
@@ -575,6 +640,7 @@ def chat():
             "has_summary": bool(state["summary"]),
             "session_id": session_id,
             "scene_reminder": scene_reminder,
+            "source": source,
         }
     )
 
