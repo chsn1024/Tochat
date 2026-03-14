@@ -332,6 +332,44 @@
             font-size: 13px;
         }
 
+        .mechanism-panel {
+            margin: 16px 24px 0;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: var(--panel-strong);
+            border: 1px solid var(--line);
+        }
+
+        .mechanism-panel h3 {
+            margin: 0 0 10px;
+            font-size: 14px;
+        }
+
+        .mechanism-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .mechanism-item {
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+        }
+
+        .mechanism-item strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .mechanism-item span {
+            font-size: 14px;
+            color: var(--text);
+        }
+
         .input-area {
             padding: 16px 24px 24px;
             border-top: 1px solid var(--line);
@@ -461,6 +499,28 @@
                 <p>建议直接输入课程问题、代码报错、算法题思路或项目设计任务。</p>
             </div>
 
+            <section class="mechanism-panel" id="mechanism-panel">
+                <h3>机制状态展示</h3>
+                <div class="mechanism-grid">
+                    <div class="mechanism-item">
+                        <strong>回答来源</strong>
+                        <span id="mechanism-source">等待触发</span>
+                    </div>
+                    <div class="mechanism-item">
+                        <strong>结构化输出</strong>
+                        <span id="mechanism-structured">已开启</span>
+                    </div>
+                    <div class="mechanism-item">
+                        <strong>上下文摘要</strong>
+                        <span id="mechanism-summary">未启用</span>
+                    </div>
+                    <div class="mechanism-item">
+                        <strong>场景一致性提醒</strong>
+                        <span id="mechanism-scene">未触发</span>
+                    </div>
+                </div>
+            </section>
+
             <div id="chat"></div>
             <div class="status" id="status">等待提问</div>
 
@@ -479,6 +539,10 @@
         const statusText = document.getElementById("status");
         const sendButton = document.getElementById("send-button");
         const sessionList = document.getElementById("session-list");
+        const mechanismSource = document.getElementById("mechanism-source");
+        const mechanismStructured = document.getElementById("mechanism-structured");
+        const mechanismSummary = document.getElementById("mechanism-summary");
+        const mechanismScene = document.getElementById("mechanism-scene");
         const placeholderByScene = {
             general: "例如：用通俗语言解释一下进程和线程的区别，并给一个 Java 示例",
             exam: "例如：408 考试里如何区分进程、线程和协程？请按考点帮我整理",
@@ -489,6 +553,18 @@
 
         function escapeHtml(value) {
             return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        function updateMechanismPanel({
+            source = "",
+            structuredMode = structuredModeToggle.checked,
+            hasSummary = false,
+            sceneReminder = ""
+        } = {}) {
+            mechanismSource.innerText = source === "local_faq" ? "本地 FAQ / 规则命中" : source === "deepseek" ? "DeepSeek API" : "等待触发";
+            mechanismStructured.innerText = structuredMode ? "已开启" : "未开启";
+            mechanismSummary.innerText = hasSummary ? "已启用" : "未启用";
+            mechanismScene.innerText = sceneReminder ? "已触发" : "未触发";
         }
 
         function appendMessage(role, html, metadata = null, sceneReminder = "", source = "") {
@@ -564,6 +640,12 @@
                     data.scene_reminder || "",
                     data.source || ""
                 );
+                updateMechanismPanel({
+                    source: data.source || "",
+                    structuredMode: data.structured_mode,
+                    hasSummary: data.has_summary,
+                    sceneReminder: data.scene_reminder || ""
+                });
                 statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
                 currentSessionId = data.session_id;
                 loadSessions();
@@ -580,6 +662,12 @@
             await fetch("/reset", { method: "POST" });
             chatBox.innerHTML = "";
             statusText.innerText = "会话已重置";
+            updateMechanismPanel({
+                source: "",
+                structuredMode: structuredModeToggle.checked,
+                hasSummary: false,
+                sceneReminder: ""
+            });
             loadSessions();
         }
 
@@ -634,6 +722,12 @@
                 });
                 currentSessionId = data.session_id;
                 statusText.innerText = `已加载历史会话 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
+                updateMechanismPanel({
+                    source: "",
+                    structuredMode: structuredModeToggle.checked,
+                    hasSummary: data.has_summary,
+                    sceneReminder: ""
+                });
                 loadSessions();
             } catch (error) {
                 statusText.innerText = `加载历史会话失败：${error.message}`;
@@ -660,10 +754,21 @@
                 document.body.classList.add("dark");
             }
             updatePlaceholder();
+            updateMechanismPanel({
+                structuredMode: structuredModeToggle.checked
+            });
             loadSessions();
         };
 
         sceneSelect.addEventListener("change", updatePlaceholder);
+        structuredModeToggle.addEventListener("change", () => {
+            updateMechanismPanel({
+                source: mechanismSource.innerText === "本地 FAQ / 规则命中" ? "local_faq" : mechanismSource.innerText === "DeepSeek API" ? "deepseek" : "",
+                structuredMode: structuredModeToggle.checked,
+                hasSummary: mechanismSummary.innerText === "已启用",
+                sceneReminder: mechanismScene.innerText === "已触发" ? "triggered" : ""
+            });
+        });
     </script>
 </body>
 
