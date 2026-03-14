@@ -507,7 +507,9 @@
             }
 
             chatBox.appendChild(message);
-            message.querySelectorAll("pre code").forEach((block) => hljs.highlightElement(block));
+            if (window.hljs) {
+                message.querySelectorAll("pre code").forEach((block) => window.hljs.highlightElement(block));
+            }
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
