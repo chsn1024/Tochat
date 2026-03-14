@@ -340,9 +340,20 @@
             border: 1px solid var(--line);
         }
 
-        .mechanism-panel h3 {
-            margin: 0 0 10px;
+        .mechanism-panel summary {
+            cursor: pointer;
             font-size: 14px;
+            font-weight: 700;
+            color: var(--text);
+            list-style: none;
+        }
+
+        .mechanism-panel summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .mechanism-panel[open] summary {
+            margin-bottom: 10px;
         }
 
         .mechanism-grid {
@@ -499,8 +510,8 @@
                 <p>建议直接输入课程问题、代码报错、算法题思路或项目设计任务。</p>
             </div>
 
-            <section class="mechanism-panel" id="mechanism-panel">
-                <h3>机制状态展示</h3>
+            <details class="mechanism-panel" id="mechanism-panel">
+                <summary>机制状态展示</summary>
                 <div class="mechanism-grid">
                     <div class="mechanism-item">
                         <strong>回答来源</strong>
@@ -519,7 +530,7 @@
                         <span id="mechanism-scene">未触发</span>
                     </div>
                 </div>
-            </section>
+            </details>
 
             <div id="chat"></div>
             <div class="status" id="status">等待提问</div>
