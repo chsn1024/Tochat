@@ -303,6 +303,17 @@
             color: var(--text);
         }
 
+        .scene-reminder {
+            margin-top: 12px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(191, 90, 43, 0.08);
+            border: 1px solid rgba(191, 90, 43, 0.2);
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
         .status {
             padding: 0 24px 10px;
             color: var(--muted);
@@ -468,7 +479,7 @@
             return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
-        function appendMessage(role, html, metadata = null) {
+        function appendMessage(role, html, metadata = null, sceneReminder = "") {
             const message = document.createElement("div");
             message.className = `message ${role}`;
             message.innerHTML = html;
@@ -486,6 +497,13 @@
                     </details>
                 `;
                 message.appendChild(meta);
+            }
+
+            if (sceneReminder) {
+                const reminder = document.createElement("div");
+                reminder.className = "scene-reminder";
+                reminder.innerHTML = `<strong>场景提醒：</strong>${escapeHtml(sceneReminder)}`;
+                message.appendChild(reminder);
             }
 
             chatBox.appendChild(message);
@@ -518,7 +536,12 @@
                     throw new Error(data.error || "请求失败");
                 }
 
-                appendMessage("bot", marked.parse(data.reply), structuredModeToggle.checked ? data.structured : null);
+                appendMessage(
+                    "bot",
+                    marked.parse(data.reply),
+                    structuredModeToggle.checked ? data.structured : null,
+                    data.scene_reminder || ""
+                );
                 statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
                 currentSessionId = data.session_id;
                 loadSessions();

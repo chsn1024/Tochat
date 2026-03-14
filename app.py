@@ -237,6 +237,81 @@ MEDIUM_CONFIDENCE_HINTS = (
     "大概率",
 )
 
+SCENE_KEYWORDS = {
+    "general": (
+        "课程",
+        "学习",
+        "考试",
+        "考研",
+        "算法",
+        "数据结构",
+        "操作系统",
+        "计算机网络",
+        "数据库",
+        "编程",
+        "代码",
+        "调试",
+        "项目",
+        "论文",
+        "面试",
+        "java",
+        "python",
+        "c++",
+        "flask",
+        "前端",
+        "后端",
+    ),
+    "exam": (
+        "考试",
+        "考研",
+        "408",
+        "真题",
+        "考点",
+        "选择题",
+        "简答题",
+        "复习",
+        "刷题",
+        "知识点",
+    ),
+    "coding": (
+        "代码",
+        "报错",
+        "异常",
+        "bug",
+        "调试",
+        "编译",
+        "运行",
+        "函数",
+        "接口",
+        "java",
+        "python",
+        "c++",
+        "javascript",
+        "sql",
+    ),
+    "project": (
+        "项目",
+        "系统",
+        "需求",
+        "模块",
+        "架构",
+        "设计",
+        "数据库",
+        "部署",
+        "技术选型",
+        "实现",
+        "功能",
+        "流程图",
+    ),
+}
+
+SCENE_GUIDANCE = {
+    "general": "当前场景更适合课程学习、概念理解、算法训练、编程实践等计算机类学习问题。你也可以把问题改成与课程知识、代码实现或技术原理相关的提问。",
+    "exam": "当前场景更适合考试辅导。你可以把问题改成考点梳理、题型分析、真题讲解或复习规划。",
+    "coding": "当前场景更适合代码调试与问题排查。你可以补充报错信息、代码片段、运行环境或预期结果。",
+    "project": "当前场景更适合项目实践。你可以从需求分析、模块设计、技术选型、数据库设计或实施步骤来提问。",
+}
+
 
 def get_session_id() -> str:
     if "chat_session_id" not in session:
@@ -360,6 +435,21 @@ def normalize_confidence(answer: str, confidence: str) -> str:
     return confidence
 
 
+def detect_scene_mismatch(user_input: str, scene: str) -> str:
+    if scene not in SCENE_KEYWORDS:
+        return ""
+
+    normalized_input = user_input.lower()
+    if any(keyword.lower() in normalized_input for keyword in SCENE_KEYWORDS[scene]):
+        return ""
+
+    return (
+        f"当前选择的是“{SCENE_PROMPTS[scene]['label']}”，"
+        "但这条提问与该学习场景的关联度较弱。"
+        f"{SCENE_GUIDANCE[scene]}"
+    )
+
+
 def compress_history_if_needed(state: Dict[str, Any]) -> None:
     if len(state["messages"]) <= SUMMARY_TRIGGER_MESSAGES:
         return
@@ -446,6 +536,7 @@ def chat():
         scene = "general"
     if API_KEY == "yourapi":
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
+    scene_reminder = detect_scene_mismatch(user_input, scene)
 
     state = get_conversation_state()
     session_id = get_session_id()
@@ -484,6 +575,7 @@ def chat():
             "history_count": len(state["messages"]),
             "has_summary": bool(state["summary"]),
             "session_id": session_id,
+            "scene_reminder": scene_reminder,
         }
     )
 
