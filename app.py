@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, stream_with_context, url_for
 from werkzeug.exceptions import HTTPException
+from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -22,6 +23,14 @@ SUMMARY_TRIGGER_MESSAGES = 12
 SUMMARY_MAX_CHARS = 1200
 DEFAULT_TIMEOUT = 60
 DB_PATH = os.path.join(os.path.dirname(__file__), "chat_history.db")
+MAX_AVATAR_SIZE = 2 * 1024 * 1024
+ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+USER_AVATAR_DIR = os.path.join(os.path.dirname(__file__), "static", "user_avatars")
+AI_AVATAR_OPTIONS = [
+    f"/static/ai_avatars/ai_avatar_{index:02d}.png"
+    for index in range(1, 11)
+]
+DEFAULT_AI_AVATAR = AI_AVATAR_OPTIONS[0]
 
 conversation_store: Dict[str, Dict[str, Any]] = {}
 
@@ -82,6 +91,7 @@ def init_db() -> None:
                 email TEXT NOT NULL UNIQUE,
                 username TEXT NOT NULL UNIQUE,
                 nickname TEXT NOT NULL UNIQUE,
+                avatar_url TEXT,
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
@@ -105,6 +115,12 @@ def init_db() -> None:
         }
         if "user_id" not in conversation_columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN user_id INTEGER")
+        user_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "avatar_url" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
 
 
 def get_current_user() -> Optional[Dict[str, Any]]:
@@ -114,7 +130,7 @@ def get_current_user() -> Optional[Dict[str, Any]]:
 
     with get_db_connection() as conn:
         row = conn.execute(
-            "SELECT id, email, username, nickname, created_at FROM users WHERE id = ?",
+            "SELECT id, email, username, nickname, avatar_url, created_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
 
@@ -423,6 +439,30 @@ def validate_auth_fields(email: str, username: str, nickname: str, password: str
     return ""
 
 
+def save_user_avatar(file_storage: Any) -> str:
+    if not file_storage or not file_storage.filename:
+        raise ValueError("注册时请选择用户头像")
+
+    original_filename = secure_filename(file_storage.filename)
+    _, extension = os.path.splitext(original_filename.lower())
+    if extension not in ALLOWED_AVATAR_EXTENSIONS:
+        raise ValueError("头像仅支持 JPG、PNG 或 WebP 格式")
+
+    file_storage.seek(0, os.SEEK_END)
+    file_size = file_storage.tell()
+    file_storage.seek(0)
+    if file_size <= 0:
+        raise ValueError("头像文件不能为空")
+    if file_size > MAX_AVATAR_SIZE:
+        raise ValueError("头像文件不能超过 2MB")
+
+    os.makedirs(USER_AVATAR_DIR, exist_ok=True)
+    filename = f"user_avatar_{uuid.uuid4().hex}{extension}"
+    file_path = os.path.join(USER_AVATAR_DIR, filename)
+    file_storage.save(file_path)
+    return f"/static/user_avatars/{filename}"
+
+
 def get_session_id() -> str:
     if "chat_session_id" not in session:
         session["chat_session_id"] = str(uuid.uuid4())
@@ -716,27 +756,43 @@ def auth_page():
 
 @app.route("/auth/register", methods=["POST"])
 def register():
-    request_data = request.get_json(silent=True) or {}
-    email = str(request_data.get("email", "")).strip().lower()
-    username = str(request_data.get("username", "")).strip()
-    nickname = str(request_data.get("nickname", "")).strip()
-    password = str(request_data.get("password", ""))
+    if request.form or request.files:
+        email = str(request.form.get("email", "")).strip().lower()
+        username = str(request.form.get("username", "")).strip()
+        nickname = str(request.form.get("nickname", "")).strip()
+        password = str(request.form.get("password", ""))
+        avatar_file = request.files.get("avatar")
+    else:
+        request_data = request.get_json(silent=True) or {}
+        email = str(request_data.get("email", "")).strip().lower()
+        username = str(request_data.get("username", "")).strip()
+        nickname = str(request_data.get("nickname", "")).strip()
+        password = str(request_data.get("password", ""))
+        avatar_file = None
 
     error = validate_auth_fields(email, username, nickname, password)
     if error:
         return jsonify({"error": error}), 400
+    try:
+        avatar_url = save_user_avatar(avatar_file)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     now = utc_now_iso()
     try:
         with get_db_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO users (email, username, nickname, password_hash, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (email, username, nickname, avatar_url, password_hash, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (email, username, nickname, generate_password_hash(password), now),
+                (email, username, nickname, avatar_url, generate_password_hash(password), now),
             )
     except sqlite3.IntegrityError:
+        if avatar_url:
+            avatar_path = os.path.join(os.path.dirname(__file__), avatar_url.lstrip("/").replace("/", os.sep))
+            if os.path.exists(avatar_path):
+                os.remove(avatar_path)
         return jsonify({"error": "邮箱、用户名或昵称已存在"}), 409
 
     return jsonify({"ok": True, "message": "register success"})
@@ -753,7 +809,7 @@ def login():
 
     with get_db_connection() as conn:
         user = conn.execute(
-            "SELECT id, email, username, nickname, password_hash, created_at FROM users WHERE nickname = ?",
+            "SELECT id, email, username, nickname, avatar_url, password_hash, created_at FROM users WHERE nickname = ?",
             (nickname,),
         ).fetchone()
 
@@ -773,6 +829,7 @@ def login():
                 "email": user["email"],
                 "username": user["username"],
                 "nickname": user["nickname"],
+                "avatar_url": user["avatar_url"],
             },
         }
     )
@@ -801,6 +858,8 @@ def index():
         "index.html",
         scenes={key: value["label"] for key, value in SCENE_PROMPTS.items()},
         current_user=current_user,
+        ai_avatar_options=AI_AVATAR_OPTIONS,
+        default_ai_avatar=DEFAULT_AI_AVATAR,
     )
 
 

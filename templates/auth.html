@@ -83,6 +83,54 @@
             font-size: 15px;
         }
 
+        input[type="file"] {
+            display: none;
+        }
+
+        .avatar-picker {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 14px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fffdf8;
+        }
+
+        .avatar-preview {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(191, 90, 43, 0.25);
+            background: #f3efe7;
+            flex: 0 0 auto;
+        }
+
+        .avatar-actions {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .avatar-actions button {
+            width: auto;
+            padding: 9px 13px;
+            border: 1px solid var(--line);
+            background: transparent;
+            color: var(--text);
+        }
+
+        .avatar-actions span {
+            display: block;
+            margin-top: 7px;
+            color: var(--muted);
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         button {
             width: 100%;
             border: none;
@@ -161,6 +209,14 @@
 
         <form id="auth-form">
             <div id="register-fields">
+                <div class="avatar-picker">
+                    <img class="avatar-preview" id="avatar-preview" alt="头像预览">
+                    <div class="avatar-actions">
+                        <button type="button" id="choose-avatar">选择头像</button>
+                        <span id="avatar-name">注册时请选择一张头像</span>
+                        <input type="file" id="avatar-input" accept="image/jpeg,image/png,image/webp">
+                    </div>
+                </div>
                 <div class="form-group">
                     <input type="email" id="email" placeholder="邮箱">
                 </div>
@@ -193,7 +249,12 @@
         const toggleAuth = document.getElementById("toggle-auth");
         const toggleCopy = document.getElementById("toggle-copy");
         const formMessage = document.getElementById("form-message");
+        const chooseAvatar = document.getElementById("choose-avatar");
+        const avatarInput = document.getElementById("avatar-input");
+        const avatarPreview = document.getElementById("avatar-preview");
+        const avatarName = document.getElementById("avatar-name");
         let isLogin = true;
+        let selectedAvatar = null;
 
         function setMessage(text, type = "error") {
             formMessage.className = `message ${type}`;
@@ -240,9 +301,58 @@
             return data;
         }
 
+        async function requestForm(url, formData) {
+            const response = await fetch(url, {
+                method: "POST",
+                body: formData
+            });
+            const responseText = await response.text();
+            let data = {};
+
+            try {
+                data = responseText ? JSON.parse(responseText) : {};
+            } catch (error) {
+                throw new Error(
+                    response.ok
+                        ? "后端返回的不是 JSON，请确认页面是通过 Flask 服务打开的。"
+                        : `后端返回了 HTML 错误页，请查看运行 python app.py 的终端日志。状态码：${response.status}`
+                );
+            }
+
+            if (!response.ok) {
+                throw new Error(data.error || "请求失败");
+            }
+            return data;
+        }
+
         toggleAuth.onclick = (event) => {
             event.preventDefault();
             setMode(!isLogin);
+        };
+
+        chooseAvatar.onclick = () => {
+            avatarInput.click();
+        };
+
+        avatarInput.onchange = () => {
+            const file = avatarInput.files[0];
+            if (!file) return;
+            if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                setMessage("头像仅支持 JPG、PNG 或 WebP 格式");
+                avatarInput.value = "";
+                selectedAvatar = null;
+                return;
+            }
+            if (file.size > 2 * 1024 * 1024) {
+                setMessage("头像文件不能超过 2MB");
+                avatarInput.value = "";
+                selectedAvatar = null;
+                return;
+            }
+            selectedAvatar = file;
+            avatarName.innerText = file.name;
+            avatarPreview.src = URL.createObjectURL(file);
+            clearMessage();
         };
 
         authForm.onsubmit = async (event) => {
@@ -267,7 +377,18 @@
                     return;
                 }
 
-                await requestJson("/auth/register", payload);
+                if (!selectedAvatar) {
+                    throw new Error("注册时请选择一张头像");
+                }
+
+                const formData = new FormData();
+                formData.append("email", payload.email);
+                formData.append("username", payload.username);
+                formData.append("nickname", payload.nickname);
+                formData.append("password", payload.password);
+                formData.append("avatar", selectedAvatar, selectedAvatar.name);
+
+                await requestForm("/auth/register", formData);
                 setMode(true);
                 setMessage("注册成功，请使用昵称和密码登录。", "success");
             } catch (error) {

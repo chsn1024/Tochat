@@ -125,11 +125,28 @@
         }
 
         .user-panel {
+            display: flex;
+            align-items: center;
+            gap: 12px;
             margin: 0 0 22px;
             padding: 14px 16px;
             border-radius: 16px;
             background: var(--panel-strong);
             border: 1px solid var(--line);
+        }
+
+        .panel-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(191, 90, 43, 0.25);
+            background: var(--bg);
+            flex: 0 0 auto;
+        }
+
+        .user-meta {
+            min-width: 0;
         }
 
         .user-panel strong {
@@ -269,17 +286,52 @@
             padding: 20px 24px;
         }
 
-        .message {
-            max-width: 85%;
+        .message-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
             margin-bottom: 16px;
+            max-width: 88%;
+        }
+
+        .user-row {
+            flex-direction: row-reverse;
+            margin-left: auto;
+        }
+
+        .bot-row {
+            margin-right: auto;
+        }
+
+        .avatar {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(191, 90, 43, 0.22);
+            background: var(--panel-strong);
+            box-shadow: 0 8px 22px rgba(91, 64, 33, 0.12);
+            flex: 0 0 auto;
+            user-select: none;
+        }
+
+        .bot-avatar {
+            cursor: pointer;
+        }
+
+        .bot-avatar.shake {
+            animation: avatarShake 0.35s ease;
+        }
+
+        .message {
             padding: 16px 18px;
             border-radius: 20px;
             line-height: 1.7;
+            min-width: 0;
             animation: fadeUp 0.25s ease;
         }
 
         .user {
-            margin-left: auto;
             background: var(--user-bg);
         }
 
@@ -444,6 +496,32 @@
             }
         }
 
+        @keyframes avatarShake {
+            0% {
+                transform: translateX(0) rotate(0deg);
+            }
+
+            20% {
+                transform: translateX(-3px) rotate(-6deg);
+            }
+
+            40% {
+                transform: translateX(3px) rotate(6deg);
+            }
+
+            60% {
+                transform: translateX(-2px) rotate(-4deg);
+            }
+
+            80% {
+                transform: translateX(2px) rotate(4deg);
+            }
+
+            100% {
+                transform: translateX(0) rotate(0deg);
+            }
+        }
+
         @media (max-width: 900px) {
             .shell {
                 grid-template-columns: 1fr;
@@ -462,6 +540,10 @@
             }
 
             .message {
+                max-width: none;
+            }
+
+            .message-row {
                 max-width: 100%;
             }
 
@@ -490,8 +572,11 @@
             </div>
 
             <div class="user-panel">
-                <strong>{{ current_user.nickname }}</strong>
-                <span>{{ current_user.email }}</span>
+                <img class="panel-avatar" src="{{ current_user.avatar_url or default_ai_avatar }}" alt="用户头像">
+                <div class="user-meta">
+                    <strong>{{ current_user.nickname }}</strong>
+                    <span>{{ current_user.email }}</span>
+                </div>
             </div>
 
             <div class="control-group">
@@ -580,6 +665,13 @@
         const mechanismStructured = document.getElementById("mechanism-structured");
         const mechanismSummary = document.getElementById("mechanism-summary");
         const mechanismScene = document.getElementById("mechanism-scene");
+        const userAvatarUrl = {{ (current_user.avatar_url or default_ai_avatar) | tojson }};
+        const aiAvatarOptions = {{ ai_avatar_options | tojson }};
+        let aiAvatarIndex = Number(localStorage.getItem("aiAvatarIndex") || "0");
+        if (!Number.isInteger(aiAvatarIndex) || aiAvatarIndex < 0 || aiAvatarIndex >= aiAvatarOptions.length) {
+            aiAvatarIndex = 0;
+        }
+        let currentAiAvatarUrl = aiAvatarOptions[aiAvatarIndex];
         const placeholderByScene = {
             general: "例如：用通俗语言解释一下进程和线程的区别，并给一个 Java 示例",
             exam: "例如：408 考试里如何区分进程、线程和协程？请按考点帮我整理",
@@ -590,6 +682,25 @@
 
         function escapeHtml(value) {
             return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        function updateAllAiAvatars() {
+            document.querySelectorAll(".bot-avatar").forEach((avatar) => {
+                avatar.src = currentAiAvatarUrl;
+            });
+        }
+
+        function cycleAiAvatar(avatar) {
+            avatar.classList.remove("shake");
+            void avatar.offsetWidth;
+            avatar.classList.add("shake");
+
+            window.setTimeout(() => {
+                aiAvatarIndex = (aiAvatarIndex + 1) % aiAvatarOptions.length;
+                currentAiAvatarUrl = aiAvatarOptions[aiAvatarIndex];
+                localStorage.setItem("aiAvatarIndex", String(aiAvatarIndex));
+                updateAllAiAvatars();
+            }, 180);
         }
 
         function updateMechanismPanel({
@@ -605,6 +716,18 @@
         }
 
         function appendMessage(role, html, metadata = null, sceneReminder = "", source = "") {
+            const row = document.createElement("div");
+            row.className = `message-row ${role}-row`;
+
+            const avatar = document.createElement("img");
+            avatar.className = `avatar ${role}-avatar`;
+            avatar.alt = role === "bot" ? "AI 助手头像" : "用户头像";
+            avatar.src = role === "bot" ? currentAiAvatarUrl : userAvatarUrl;
+            if (role === "bot") {
+                avatar.title = "双击切换 AI 助手头像";
+                avatar.ondblclick = () => cycleAiAvatar(avatar);
+            }
+
             const message = document.createElement("div");
             message.className = `message ${role}`;
             message.innerHTML = html;
@@ -638,7 +761,9 @@
                 message.appendChild(badge);
             }
 
-            chatBox.appendChild(message);
+            row.appendChild(avatar);
+            row.appendChild(message);
+            chatBox.appendChild(row);
             if (window.hljs) {
                 message.querySelectorAll("pre code").forEach((block) => window.hljs.highlightElement(block));
             }

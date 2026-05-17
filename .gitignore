@@ -33,6 +33,12 @@ Thumbs.db
 # =====================
 instance/
 *.log
+chat_history.db
+chat_history.db-shm
+chat_history.db-wal
+chat_history.db-journal
+static/user_avatars/*
+!static/user_avatars/.gitkeep
 
 # =====================
 # Python packaging
