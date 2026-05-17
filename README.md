@@ -50,20 +50,17 @@
 
 1. `conversation_store`
    按会话保存消息列表和历史摘要，替代原来的全局 `chat_history`。
-
 2. `SCENE_PROMPTS`
    定义不同学习场景的角色提示词。
-
 3. `build_messages()`
    构造发送给 DeepSeek 的最终消息，包括：
+
    - 基础系统角色
    - 场景提示词
    - 历史摘要
    - 最近多轮对话
-
 4. `compress_history_if_needed()`
    在上下文过长时调用模型生成摘要，实现上下文压缩。
-
 5. `safe_parse_structured_content()`
    解析结构化 JSON 输出，并在异常时自动降级。
 
@@ -117,13 +114,17 @@
 
 ## 运行方式
 
-### 1. 安装依赖
+### 1. 运行环境
+
+本项目需要 `Python 3.8` 或更高版本，推荐使用 `Python 3.11`。
+
+### 2. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置环境变量
+### 3. 配置环境变量
 
 Linux / macOS:
 
@@ -139,7 +140,7 @@ $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 $env:FLASK_SECRET_KEY="自定义 Flask Secret"
 ```
 
-### 3. 启动项目
+### 4. 启动项目
 
 ```bash
 python app.py

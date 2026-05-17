@@ -124,6 +124,26 @@
             margin-top: 22px;
         }
 
+        .user-panel {
+            margin: 0 0 22px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: var(--panel-strong);
+            border: 1px solid var(--line);
+        }
+
+        .user-panel strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .user-panel span {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+            word-break: break-word;
+        }
+
         .control-group label {
             display: block;
             margin-bottom: 8px;
@@ -469,6 +489,11 @@
                 <p>面向计算机类大学生，支持角色场景切换、多轮上下文管理与结构化输出。</p>
             </div>
 
+            <div class="user-panel">
+                <strong>{{ current_user.nickname }}</strong>
+                <span>{{ current_user.email }}</span>
+            </div>
+
             <div class="control-group">
                 <label for="scene">学习场景</label>
                 <select id="scene">
@@ -494,6 +519,7 @@
             <div class="button-row">
                 <button class="primary" type="button" onclick="toggleTheme()">暗 / 亮</button>
                 <button class="secondary" type="button" onclick="resetChat()">重置会话</button>
+                <button class="secondary" type="button" onclick="logout()">退出</button>
             </div>
 
             <div class="control-group">
@@ -617,6 +643,61 @@
                 message.querySelectorAll("pre code").forEach((block) => window.hljs.highlightElement(block));
             }
             chatBox.scrollTop = chatBox.scrollHeight;
+            return message;
+        }
+
+        function renderStreamingBotMessage(message, text) {
+            message.innerHTML = marked.parse(text || "");
+            if (window.hljs) {
+                message.querySelectorAll("pre code").forEach((block) => window.hljs.highlightElement(block));
+            }
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function appendBotExtras(message, metadata = null, sceneReminder = "", source = "") {
+            if (metadata) {
+                const meta = document.createElement("div");
+                meta.className = "structured-meta";
+                meta.innerHTML = `
+                    <div><strong>摘要：</strong>${metadata.summary}</div>
+                    <div><strong>类别：</strong>${metadata.category}</div>
+                    <div><strong>置信度：</strong>${metadata.confidence}</div>
+                    <details>
+                        <summary>查看原始 JSON</summary>
+                        <pre>${JSON.stringify(metadata, null, 2)}</pre>
+                    </details>
+                `;
+                message.appendChild(meta);
+            }
+
+            if (sceneReminder) {
+                const reminder = document.createElement("div");
+                reminder.className = "scene-reminder";
+                reminder.innerHTML = `<strong>场景提醒：</strong>${escapeHtml(sceneReminder)}`;
+                message.appendChild(reminder);
+            }
+
+            if (source === "local_faq") {
+                const badge = document.createElement("div");
+                badge.className = "source-badge";
+                badge.innerText = "本地 FAQ 命中";
+                message.appendChild(badge);
+            }
+
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function parseSseBlock(block) {
+            const eventLine = block.split("\n").find((line) => line.startsWith("event:"));
+            const dataLines = block
+                .split("\n")
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).trimStart());
+
+            return {
+                event: eventLine ? eventLine.slice(6).trim() : "message",
+                data: dataLines.length ? JSON.parse(dataLines.join("\n")) : {}
+            };
         }
 
         async function sendMessage() {
@@ -624,12 +705,13 @@
             if (!userText) return;
 
             appendMessage("user", escapeHtml(userText));
+            const botMessage = appendMessage("bot", "<p>正在生成...</p>");
             input.value = "";
             sendButton.disabled = true;
-            statusText.innerText = "正在请求 DeepSeek...";
+            statusText.innerText = "正在流式生成...";
 
             try {
-                const response = await fetch("/chat", {
+                const response = await fetch("/chat/stream", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -639,29 +721,69 @@
                     })
                 });
 
-                const data = await response.json();
                 if (!response.ok) {
+                    const data = await response.json();
                     throw new Error(data.error || "请求失败");
                 }
 
-                appendMessage(
-                    "bot",
-                    marked.parse(data.reply),
-                    structuredModeToggle.checked ? data.structured : null,
-                    data.scene_reminder || "",
-                    data.source || ""
-                );
-                updateMechanismPanel({
-                    source: data.source || "",
-                    structuredMode: data.structured_mode,
-                    hasSummary: data.has_summary,
-                    sceneReminder: data.scene_reminder || ""
-                });
-                statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
-                currentSessionId = data.session_id;
-                loadSessions();
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+                let streamedText = "";
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const blocks = buffer.split("\n\n");
+                    buffer = blocks.pop();
+
+                    for (const block of blocks) {
+                        if (!block.trim()) continue;
+
+                        const { event, data } = parseSseBlock(block);
+                        if (event === "start") {
+                            updateMechanismPanel({
+                                source: data.source || "",
+                                structuredMode: data.structured_mode,
+                                hasSummary: data.has_summary,
+                                sceneReminder: data.scene_reminder || ""
+                            });
+                        }
+
+                        if (event === "delta") {
+                            streamedText += data.content || "";
+                            renderStreamingBotMessage(botMessage, streamedText);
+                        }
+
+                        if (event === "error") {
+                            throw new Error(data.error || "流式请求失败");
+                        }
+
+                        if (event === "done") {
+                            streamedText = data.reply || streamedText;
+                            renderStreamingBotMessage(botMessage, streamedText);
+                            appendBotExtras(
+                                botMessage,
+                                data.structured_mode ? data.structured : null,
+                                data.scene_reminder || "",
+                                data.source || ""
+                            );
+                            updateMechanismPanel({
+                                source: data.source || "",
+                                structuredMode: data.structured_mode,
+                                hasSummary: data.has_summary,
+                                sceneReminder: data.scene_reminder || ""
+                            });
+                            statusText.innerText = `已完成 | 历史消息 ${data.history_count} 条 | 上下文摘要 ${data.has_summary ? "已启用" : "未启用"}`;
+                            currentSessionId = data.session_id;
+                            loadSessions();
+                        }
+                    }
+                }
             } catch (error) {
-                appendMessage("bot", `<p>请求失败：${error.message}</p>`);
+                renderStreamingBotMessage(botMessage, `请求失败：${error.message}`);
                 statusText.innerText = "请求失败";
             } finally {
                 sendButton.disabled = false;
@@ -680,6 +802,11 @@
                 sceneReminder: ""
             });
             loadSessions();
+        }
+
+        async function logout() {
+            await fetch("/auth/logout", { method: "POST" });
+            window.location.href = "/auth";
         }
 
         function renderSessions(sessions) {

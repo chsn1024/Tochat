@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 学习场景智能问答助手</title>
+    <style>
+        :root {
+            --bg: #f3efe7;
+            --panel: #fffaf2;
+            --text: #1d1a16;
+            --muted: #6b6257;
+            --accent: #bf5a2b;
+            --accent-dark: #93411c;
+            --line: rgba(54, 42, 28, 0.12);
+            --danger: #b42318;
+            --success: #177245;
+            --shadow: 0 18px 55px rgba(91, 64, 33, 0.14);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(191, 90, 43, 0.18), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(49, 97, 140, 0.16), transparent 24%),
+                linear-gradient(135deg, #efe2cf 0%, var(--bg) 52%, #e6ddd2 100%);
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+
+        .auth-card {
+            width: min(440px, 100%);
+            padding: 32px;
+            border-radius: 22px;
+            background: rgba(255, 250, 242, 0.94);
+            border: 1px solid var(--line);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+        }
+
+        .eyebrow {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(191, 90, 43, 0.12);
+            color: var(--accent-dark);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        h1 {
+            margin: 16px 0 8px;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .subtitle {
+            margin: 0 0 24px;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        input {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: #fffdf8;
+            color: var(--text);
+            padding: 13px 14px;
+            font-size: 15px;
+        }
+
+        button {
+            width: 100%;
+            border: none;
+            border-radius: 14px;
+            padding: 13px 16px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 700;
+            transition: transform 0.15s ease, opacity 0.15s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.65;
+            transform: none;
+        }
+
+        .primary {
+            margin-top: 4px;
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .toggle-text {
+            margin: 18px 0 0;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        .toggle-text a {
+            color: var(--accent-dark);
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        #register-fields {
+            display: none;
+        }
+
+        .message {
+            display: none;
+            margin: 0 0 14px;
+            padding: 11px 12px;
+            border-radius: 12px;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        .message.error {
+            display: block;
+            color: var(--danger);
+            background: rgba(180, 35, 24, 0.09);
+            border: 1px solid rgba(180, 35, 24, 0.18);
+        }
+
+        .message.success {
+            display: block;
+            color: var(--success);
+            background: rgba(23, 114, 69, 0.09);
+            border: 1px solid rgba(23, 114, 69, 0.18);
+        }
+    </style>
+</head>
+
+<body>
+    <main class="auth-card">
+        <span class="eyebrow">DeepSeek + Flask</span>
+        <h1 id="auth-title">欢迎回来</h1>
+        <p class="subtitle">登录后进入学习场景智能问答助手，你的会话历史会按账号隔离保存。</p>
+
+        <div id="form-message" class="message"></div>
+
+        <form id="auth-form">
+            <div id="register-fields">
+                <div class="form-group">
+                    <input type="email" id="email" placeholder="邮箱">
+                </div>
+                <div class="form-group">
+                    <input type="text" id="username" placeholder="唯一用户名，至少 3 个字符">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <input type="text" id="nickname" placeholder="昵称" required>
+            </div>
+            <div class="form-group">
+                <input type="password" id="password" placeholder="密码，至少 6 位" required>
+            </div>
+
+            <button class="primary" id="submit-btn" type="submit">登录</button>
+        </form>
+
+        <p class="toggle-text">
+            <span id="toggle-copy">没有账号？</span>
+            <a href="#" id="toggle-auth">立即注册</a>
+        </p>
+    </main>
+
+    <script>
+        const authForm = document.getElementById("auth-form");
+        const authTitle = document.getElementById("auth-title");
+        const registerFields = document.getElementById("register-fields");
+        const submitButton = document.getElementById("submit-btn");
+        const toggleAuth = document.getElementById("toggle-auth");
+        const toggleCopy = document.getElementById("toggle-copy");
+        const formMessage = document.getElementById("form-message");
+        let isLogin = true;
+
+        function setMessage(text, type = "error") {
+            formMessage.className = `message ${type}`;
+            formMessage.innerText = text;
+        }
+
+        function clearMessage() {
+            formMessage.className = "message";
+            formMessage.innerText = "";
+        }
+
+        function setMode(nextIsLogin) {
+            isLogin = nextIsLogin;
+            authTitle.innerText = isLogin ? "欢迎回来" : "注册账号";
+            registerFields.style.display = isLogin ? "none" : "block";
+            submitButton.innerText = isLogin ? "登录" : "注册";
+            toggleCopy.innerText = isLogin ? "没有账号？" : "已有账号？";
+            toggleAuth.innerText = isLogin ? "立即注册" : "去登录";
+            clearMessage();
+        }
+
+        async function requestJson(url, payload) {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const responseText = await response.text();
+            let data = {};
+
+            try {
+                data = responseText ? JSON.parse(responseText) : {};
+            } catch (error) {
+                throw new Error(
+                    response.ok
+                        ? "后端返回的不是 JSON，请确认页面是通过 Flask 服务打开的。"
+                        : `后端返回了 HTML 错误页，请查看运行 python app.py 的终端日志。状态码：${response.status}`
+                );
+            }
+
+            if (!response.ok) {
+                throw new Error(data.error || "请求失败");
+            }
+            return data;
+        }
+
+        toggleAuth.onclick = (event) => {
+            event.preventDefault();
+            setMode(!isLogin);
+        };
+
+        authForm.onsubmit = async (event) => {
+            event.preventDefault();
+            clearMessage();
+            submitButton.disabled = true;
+
+            const payload = {
+                email: document.getElementById("email").value.trim(),
+                username: document.getElementById("username").value.trim(),
+                nickname: document.getElementById("nickname").value.trim(),
+                password: document.getElementById("password").value
+            };
+
+            try {
+                if (isLogin) {
+                    await requestJson("/auth/login", {
+                        nickname: payload.nickname,
+                        password: payload.password
+                    });
+                    window.location.href = "/";
+                    return;
+                }
+
+                await requestJson("/auth/register", payload);
+                setMode(true);
+                setMessage("注册成功，请使用昵称和密码登录。", "success");
+            } catch (error) {
+                setMessage(error.message);
+            } finally {
+                submitButton.disabled = false;
+            }
+        };
+    </script>
+</body>
+
+</html>

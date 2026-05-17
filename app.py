@@ -3,10 +3,12 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from flask import Flask, jsonify, render_template, request, session
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, stream_with_context, url_for
+from werkzeug.exceptions import HTTPException
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
@@ -22,6 +24,15 @@ DEFAULT_TIMEOUT = 60
 DB_PATH = os.path.join(os.path.dirname(__file__), "chat_history.db")
 
 conversation_store: Dict[str, Dict[str, Any]] = {}
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error: Exception):
+    if request.path.startswith("/auth/"):
+        if isinstance(error, HTTPException):
+            return jsonify({"error": error.description}), error.code
+        return jsonify({"error": f"服务器错误: {error}"}), 500
+    raise error
 
 BASE_SYSTEM_PROMPT = """
 你是“面向计算机类大学生学习场景的智能问答助手”。
@@ -43,19 +54,35 @@ BASE_SYSTEM_PROMPT = """
 
 
 def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db() -> None:
     with get_db_connection() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS conversations (
                 session_id TEXT PRIMARY KEY,
+                user_id INTEGER,
                 summary TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                username TEXT NOT NULL UNIQUE,
+                nickname TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
             """
@@ -72,6 +99,32 @@ def init_db() -> None:
             )
             """
         )
+        conversation_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        if "user_id" not in conversation_columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN user_id INTEGER")
+
+
+def get_current_user() -> Optional[Dict[str, Any]]:
+    user_id = session.get("user_id")
+    if not user_id:
+        return None
+
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT id, email, username, nickname, created_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def require_login_json() -> Optional[Any]:
+    if get_current_user():
+        return None
+    return jsonify({"error": "请先登录"}), 401
 
 
 def utc_now_iso() -> str:
@@ -100,16 +153,18 @@ def load_conversation_state(session_id: str) -> Dict[str, Any]:
 
 def save_conversation_state(session_id: str, state: Dict[str, Any]) -> None:
     now = utc_now_iso()
+    user_id = session.get("user_id")
     with get_db_connection() as conn:
         conn.execute(
             """
-            INSERT INTO conversations (session_id, summary, updated_at, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO conversations (session_id, user_id, summary, updated_at, created_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
+                user_id = excluded.user_id,
                 summary = excluded.summary,
                 updated_at = excluded.updated_at
             """,
-            (session_id, state["summary"], now, now),
+            (session_id, user_id, state["summary"], now, now),
         )
         conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         conn.executemany(
@@ -125,6 +180,7 @@ def save_conversation_state(session_id: str, state: Dict[str, Any]) -> None:
 
 
 def list_saved_sessions(limit: int = 20) -> List[Dict[str, Any]]:
+    user_id = session.get("user_id")
     with get_db_connection() as conn:
         rows = conn.execute(
             """
@@ -136,11 +192,12 @@ def list_saved_sessions(limit: int = 20) -> List[Dict[str, Any]]:
                 COUNT(m.id) AS message_count
             FROM conversations c
             LEFT JOIN messages m ON m.session_id = c.session_id
+            WHERE c.user_id = ?
             GROUP BY c.session_id, c.summary, c.updated_at, c.created_at
             ORDER BY c.updated_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (user_id, limit),
         ).fetchall()
 
     sessions = []
@@ -354,6 +411,18 @@ LOCAL_FAQ_RULES = [
 ]
 
 
+def validate_auth_fields(email: str, username: str, nickname: str, password: str) -> str:
+    if not email or "@" not in email:
+        return "请输入有效邮箱"
+    if not username or len(username) < 3:
+        return "用户名至少需要 3 个字符"
+    if not nickname or len(nickname) < 2:
+        return "昵称至少需要 2 个字符"
+    if not password or len(password) < 6:
+        return "密码至少需要 6 位"
+    return ""
+
+
 def get_session_id() -> str:
     if "chat_session_id" not in session:
         session["chat_session_id"] = str(uuid.uuid4())
@@ -420,6 +489,109 @@ def call_deepseek(messages: List[Dict[str, str]], structured_mode: bool) -> Dict
     )
     response.raise_for_status()
     return response.json()
+
+
+def iter_deepseek_content(messages: List[Dict[str, str]], structured_mode: bool):
+    payload: Dict[str, Any] = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.5,
+        "max_tokens": 1200,
+        "stream": True,
+    }
+    if structured_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    with requests.post(
+        API_URL,
+        json=payload,
+        headers=headers,
+        timeout=DEFAULT_TIMEOUT,
+        stream=True,
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+
+            data = line[len("data:") :].strip()
+            if data == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            content = delta.get("content")
+            if content:
+                yield content
+
+
+def sse_event(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def extract_streaming_answer_delta(buffer: str, cursor: int) -> Tuple[str, int]:
+    marker = '"answer"'
+    key_index = buffer.find(marker)
+    if key_index == -1:
+        return "", cursor
+
+    colon_index = buffer.find(":", key_index + len(marker))
+    if colon_index == -1:
+        return "", cursor
+
+    start_quote = buffer.find('"', colon_index + 1)
+    if start_quote == -1:
+        return "", cursor
+
+    if cursor < start_quote + 1:
+        cursor = start_quote + 1
+
+    chars = []
+    index = cursor
+    while index < len(buffer):
+        char = buffer[index]
+        if char == "\\":
+            if index + 1 >= len(buffer):
+                break
+            escaped = buffer[index + 1]
+            if escaped == "n":
+                chars.append("\n")
+            elif escaped == "r":
+                chars.append("\r")
+            elif escaped == "t":
+                chars.append("\t")
+            elif escaped in {'"', "\\", "/"}:
+                chars.append(escaped)
+            elif escaped == "u":
+                if index + 5 >= len(buffer):
+                    break
+                hex_value = buffer[index + 2 : index + 6]
+                try:
+                    chars.append(chr(int(hex_value, 16)))
+                except ValueError:
+                    chars.append("\\u" + hex_value)
+                index += 4
+            else:
+                chars.append(escaped)
+            index += 2
+            continue
+
+        if char == '"':
+            return "".join(chars), index
+
+        chars.append(char)
+        index += 1
+
+    return "".join(chars), index
 
 
 def safe_parse_structured_content(raw_content: str) -> Dict[str, str]:
@@ -535,16 +707,108 @@ def compress_history_if_needed(state: Dict[str, Any]) -> None:
     state["messages"] = state["messages"][-MAX_RECENT_MESSAGES:]
 
 
+@app.route("/auth")
+def auth_page():
+    if get_current_user():
+        return redirect(url_for("index"))
+    return render_template("auth.html")
+
+
+@app.route("/auth/register", methods=["POST"])
+def register():
+    request_data = request.get_json(silent=True) or {}
+    email = str(request_data.get("email", "")).strip().lower()
+    username = str(request_data.get("username", "")).strip()
+    nickname = str(request_data.get("nickname", "")).strip()
+    password = str(request_data.get("password", ""))
+
+    error = validate_auth_fields(email, username, nickname, password)
+    if error:
+        return jsonify({"error": error}), 400
+
+    now = utc_now_iso()
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO users (email, username, nickname, password_hash, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (email, username, nickname, generate_password_hash(password), now),
+            )
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "邮箱、用户名或昵称已存在"}), 409
+
+    return jsonify({"ok": True, "message": "register success"})
+
+
+@app.route("/auth/login", methods=["POST"])
+def login():
+    request_data = request.get_json(silent=True) or {}
+    nickname = str(request_data.get("nickname", "")).strip()
+    password = str(request_data.get("password", ""))
+
+    if not nickname or not password:
+        return jsonify({"error": "昵称和密码不能为空"}), 400
+
+    with get_db_connection() as conn:
+        user = conn.execute(
+            "SELECT id, email, username, nickname, password_hash, created_at FROM users WHERE nickname = ?",
+            (nickname,),
+        ).fetchone()
+
+    if not user or not check_password_hash(user["password_hash"], password):
+        return jsonify({"error": "昵称或密码错误"}), 401
+
+    session.clear()
+    session["user_id"] = user["id"]
+    session["chat_session_id"] = str(uuid.uuid4())
+
+    return jsonify(
+        {
+            "ok": True,
+            "message": "login success",
+            "user": {
+                "id": user["id"],
+                "email": user["email"],
+                "username": user["username"],
+                "nickname": user["nickname"],
+            },
+        }
+    )
+
+
+@app.route("/auth/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/auth/me", methods=["GET"])
+def auth_me():
+    user = get_current_user()
+    if not user:
+        return jsonify({"authenticated": False}), 401
+    return jsonify({"authenticated": True, "user": user})
+
+
 @app.route("/")
 def index():
+    current_user = get_current_user()
+    if not current_user:
+        return redirect(url_for("auth_page"))
     return render_template(
         "index.html",
         scenes={key: value["label"] for key, value in SCENE_PROMPTS.items()},
+        current_user=current_user,
     )
 
 
 @app.route("/sessions", methods=["GET"])
 def get_sessions():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
     return jsonify(
         {
             "sessions": list_saved_sessions(),
@@ -555,10 +819,21 @@ def get_sessions():
 
 @app.route("/sessions/load", methods=["POST"])
 def load_session():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
     request_data = request.get_json(silent=True) or {}
     session_id = str(request_data.get("session_id", "")).strip()
     if not session_id:
         return jsonify({"error": "session_id 不能为空"}), 400
+
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT session_id FROM conversations WHERE session_id = ? AND user_id = ?",
+            (session_id, session.get("user_id")),
+        ).fetchone()
+    if not row:
+        return jsonify({"error": "会话不存在或无权访问"}), 404
 
     state = switch_session(session_id)
     return jsonify(
@@ -574,6 +849,9 @@ def load_session():
 
 @app.route("/chat", methods=["POST"])
 def chat():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
     request_data = request.get_json(silent=True) or {}
     user_input = str(request_data.get("message", "")).strip()
     scene = str(request_data.get("scene", "general")).strip()
@@ -645,8 +923,130 @@ def chat():
     )
 
 
+@app.route("/chat/stream", methods=["POST"])
+def chat_stream():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
+    request_data = request.get_json(silent=True) or {}
+    user_input = str(request_data.get("message", "")).strip()
+    scene = str(request_data.get("scene", "general")).strip()
+    structured_mode = bool(request_data.get("structured_mode", True))
+
+    if not user_input:
+        return jsonify({"error": "message 不能为空"}), 400
+    if scene not in SCENE_PROMPTS:
+        scene = "general"
+    if API_KEY == "yourapi":
+        return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
+
+    scene_reminder = detect_scene_mismatch(user_input, scene)
+    state = get_conversation_state()
+    session_id = get_session_id()
+    state["messages"].append({"role": "user", "content": user_input})
+    compress_history_if_needed(state)
+
+    local_faq_result = match_local_faq(user_input)
+    source = "local_faq" if local_faq_result else "deepseek"
+
+    @stream_with_context
+    def generate():
+        raw_content = ""
+        streamed_answer = ""
+        answer_cursor = 0
+
+        yield sse_event(
+            "start",
+            {
+                "scene": scene,
+                "structured_mode": structured_mode,
+                "has_summary": bool(state["summary"]),
+                "session_id": session_id,
+                "scene_reminder": scene_reminder,
+                "source": source,
+            },
+        )
+
+        if local_faq_result:
+            parsed_content = (
+                local_faq_result
+                if structured_mode
+                else {
+                    "answer": local_faq_result["answer"],
+                    "summary": "本地 FAQ 命中，未额外生成摘要。",
+                    "category": local_faq_result["category"],
+                    "confidence": local_faq_result["confidence"],
+                }
+            )
+            streamed_answer = parsed_content["answer"]
+            yield sse_event("delta", {"content": streamed_answer})
+        else:
+            try:
+                for content in iter_deepseek_content(
+                    build_messages(state, scene, structured_mode),
+                    structured_mode=structured_mode,
+                ):
+                    raw_content += content
+                    if structured_mode:
+                        delta, answer_cursor = extract_streaming_answer_delta(raw_content, answer_cursor)
+                    else:
+                        delta = content
+
+                    if delta:
+                        streamed_answer += delta
+                        yield sse_event("delta", {"content": delta})
+            except requests.RequestException as exc:
+                yield sse_event("error", {"error": f"DeepSeek API 调用失败: {exc}"})
+                return
+
+            parsed_content = (
+                safe_parse_structured_content(raw_content)
+                if structured_mode
+                else {
+                    "answer": raw_content,
+                    "summary": "普通文本模式未生成摘要。",
+                    "category": "其他",
+                    "confidence": "中",
+                }
+            )
+
+            if structured_mode and not streamed_answer:
+                streamed_answer = parsed_content["answer"]
+                yield sse_event("delta", {"content": streamed_answer})
+
+        state["messages"].append({"role": "assistant", "content": parsed_content["answer"]})
+        save_conversation_state(session_id, state)
+
+        yield sse_event(
+            "done",
+            {
+                "reply": parsed_content["answer"],
+                "structured": parsed_content,
+                "scene": scene,
+                "structured_mode": structured_mode,
+                "history_count": len(state["messages"]),
+                "has_summary": bool(state["summary"]),
+                "session_id": session_id,
+                "scene_reminder": scene_reminder,
+                "source": source,
+            },
+        )
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.route("/reset", methods=["POST"])
 def reset_chat():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
     session_id = get_session_id()
     conversation_store[session_id] = {"messages": [], "summary": ""}
     save_conversation_state(session_id, conversation_store[session_id])
