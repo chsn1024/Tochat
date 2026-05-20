@@ -11,6 +11,8 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from rag_core import RagNotReadyError, build_context, format_sources, retrieve
+
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
 
@@ -37,7 +39,7 @@ conversation_store: Dict[str, Dict[str, Any]] = {}
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error: Exception):
-    if request.path.startswith("/auth/"):
+    if request.path.startswith("/auth/") or request.path.startswith("/profile/") or request.path == "/ask":
         if isinstance(error, HTTPException):
             return jsonify({"error": error.description}), error.code
         return jsonify({"error": f"服务器错误: {error}"}), 500
@@ -282,6 +284,17 @@ JSON 必须包含以下字段：
 4. 如果用户输入不完整，也要在 answer 中说明缺失信息。
 """.strip()
 
+RAG_SYSTEM_PROMPT = """
+你正在使用本地知识库回答问题。
+
+要求：
+1. 必须严格根据“知识库检索片段”回答。
+2. 如果片段中没有明确答案，请说明“知识库中没有找到明确相关信息”。
+3. 不要编造学校政策、学院规则或不存在的通知。
+4. 涉及保研、奖学金、竞赛加分等正式规则时，提醒用户以学院和学校当年正式通知为准。
+5. 回答最后要列出“引用来源”，使用片段中给出的 source 和 chunk_id。
+""".strip()
+
 LOW_CONFIDENCE_HINTS = (
     "信息不足",
     "缺少",
@@ -439,9 +452,11 @@ def validate_auth_fields(email: str, username: str, nickname: str, password: str
     return ""
 
 
-def save_user_avatar(file_storage: Any) -> str:
+def save_user_avatar(file_storage: Any, required: bool = True) -> str:
     if not file_storage or not file_storage.filename:
-        raise ValueError("注册时请选择用户头像")
+        if required:
+            raise ValueError("注册时请选择用户头像")
+        return ""
 
     original_filename = secure_filename(file_storage.filename)
     _, extension = os.path.splitext(original_filename.lower())
@@ -504,6 +519,28 @@ def build_messages(state: Dict[str, Any], scene: str, structured_mode: bool) -> 
 
     messages.extend(state["messages"][-MAX_RECENT_MESSAGES:])
     return messages
+
+
+def build_rag_messages(
+    state: Dict[str, Any],
+    scene: str,
+    structured_mode: bool,
+    rag_context: str,
+) -> List[Dict[str, str]]:
+    messages = build_messages(state, scene, structured_mode)
+    messages.insert(
+        1,
+        {
+            "role": "system",
+            "content": f"{RAG_SYSTEM_PROMPT}\n\n【知识库检索片段】\n{rag_context}",
+        },
+    )
+    return messages
+
+
+def prepare_rag_context(question: str, top_k: int = 3) -> Tuple[str, List[Dict[str, Any]]]:
+    docs, metadatas = retrieve(question, top_k=top_k)
+    return build_context(docs, metadatas), format_sources(metadatas)
 
 
 def call_deepseek(messages: List[Dict[str, str]], structured_mode: bool) -> Dict[str, Any]:
@@ -849,6 +886,76 @@ def auth_me():
     return jsonify({"authenticated": True, "user": user})
 
 
+@app.route("/profile")
+def profile_page():
+    current_user = get_current_user()
+    if not current_user:
+        return redirect(url_for("auth_page"))
+    return render_template(
+        "profile.html",
+        current_user=current_user,
+        default_avatar=DEFAULT_AI_AVATAR,
+    )
+
+
+@app.route("/profile/update", methods=["POST"])
+def update_profile():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
+
+    current_user = get_current_user()
+    if not current_user:
+        return jsonify({"error": "请先登录"}), 401
+
+    nickname = str(request.form.get("nickname", "")).strip()
+    avatar_file = request.files.get("avatar")
+
+    if not nickname or len(nickname) < 2:
+        return jsonify({"error": "昵称至少需要 2 个字符"}), 400
+
+    try:
+        new_avatar_url = save_user_avatar(avatar_file, required=False)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    old_avatar_url = current_user.get("avatar_url") or ""
+    try:
+        with get_db_connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM users WHERE nickname = ? AND id != ?",
+                (nickname, current_user["id"]),
+            ).fetchone()
+            if existing:
+                if new_avatar_url:
+                    new_avatar_path = os.path.join(
+                        os.path.dirname(__file__),
+                        new_avatar_url.lstrip("/").replace("/", os.sep),
+                    )
+                    if os.path.exists(new_avatar_path):
+                        os.remove(new_avatar_path)
+                return jsonify({"error": "昵称已存在"}), 409
+
+            avatar_url = new_avatar_url or old_avatar_url
+            conn.execute(
+                "UPDATE users SET nickname = ?, avatar_url = ? WHERE id = ?",
+                (nickname, avatar_url, current_user["id"]),
+            )
+    except sqlite3.Error as exc:
+        return jsonify({"error": f"资料更新失败: {exc}"}), 500
+
+    if new_avatar_url and old_avatar_url and old_avatar_url.startswith("/static/user_avatars/"):
+        old_avatar_path = os.path.join(
+            os.path.dirname(__file__),
+            old_avatar_url.lstrip("/").replace("/", os.sep),
+        )
+        if os.path.exists(old_avatar_path):
+            os.remove(old_avatar_path)
+
+    updated_user = get_current_user()
+    return jsonify({"ok": True, "message": "profile updated", "user": updated_user})
+
+
 @app.route("/")
 def index():
     current_user = get_current_user()
@@ -915,6 +1022,7 @@ def chat():
     user_input = str(request_data.get("message", "")).strip()
     scene = str(request_data.get("scene", "general")).strip()
     structured_mode = bool(request_data.get("structured_mode", True))
+    rag_mode = bool(request_data.get("rag_mode", False))
 
     if not user_input:
         return jsonify({"error": "message 不能为空"}), 400
@@ -923,14 +1031,21 @@ def chat():
     if API_KEY == "yourapi":
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
     scene_reminder = detect_scene_mismatch(user_input, scene)
+    rag_context = ""
+    rag_sources: List[Dict[str, Any]] = []
+    if rag_mode:
+        try:
+            rag_context, rag_sources = prepare_rag_context(user_input, top_k=3)
+        except RagNotReadyError as exc:
+            return jsonify({"error": str(exc)}), 500
 
     state = get_conversation_state()
     session_id = get_session_id()
     state["messages"].append({"role": "user", "content": user_input})
     compress_history_if_needed(state)
 
-    local_faq_result = match_local_faq(user_input)
-    source = "local_faq" if local_faq_result else "deepseek"
+    local_faq_result = {} if rag_mode else match_local_faq(user_input)
+    source = "knowledge_base" if rag_mode else "local_faq" if local_faq_result else "deepseek"
 
     if local_faq_result:
         parsed_content = (
@@ -945,8 +1060,13 @@ def chat():
         )
     else:
         try:
+            messages = (
+                build_rag_messages(state, scene, structured_mode, rag_context)
+                if rag_mode
+                else build_messages(state, scene, structured_mode)
+            )
             response_data = call_deepseek(
-                build_messages(state, scene, structured_mode),
+                messages,
                 structured_mode=structured_mode,
             )
             raw_content = response_data["choices"][0]["message"]["content"]
@@ -978,6 +1098,8 @@ def chat():
             "session_id": session_id,
             "scene_reminder": scene_reminder,
             "source": source,
+            "rag_mode": rag_mode,
+            "sources": rag_sources,
         }
     )
 
@@ -991,6 +1113,7 @@ def chat_stream():
     user_input = str(request_data.get("message", "")).strip()
     scene = str(request_data.get("scene", "general")).strip()
     structured_mode = bool(request_data.get("structured_mode", True))
+    rag_mode = bool(request_data.get("rag_mode", False))
 
     if not user_input:
         return jsonify({"error": "message 不能为空"}), 400
@@ -1000,13 +1123,21 @@ def chat_stream():
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
 
     scene_reminder = detect_scene_mismatch(user_input, scene)
+    rag_context = ""
+    rag_sources: List[Dict[str, Any]] = []
+    if rag_mode:
+        try:
+            rag_context, rag_sources = prepare_rag_context(user_input, top_k=3)
+        except RagNotReadyError as exc:
+            return jsonify({"error": str(exc)}), 500
+
     state = get_conversation_state()
     session_id = get_session_id()
     state["messages"].append({"role": "user", "content": user_input})
     compress_history_if_needed(state)
 
-    local_faq_result = match_local_faq(user_input)
-    source = "local_faq" if local_faq_result else "deepseek"
+    local_faq_result = {} if rag_mode else match_local_faq(user_input)
+    source = "knowledge_base" if rag_mode else "local_faq" if local_faq_result else "deepseek"
 
     @stream_with_context
     def generate():
@@ -1023,6 +1154,8 @@ def chat_stream():
                 "session_id": session_id,
                 "scene_reminder": scene_reminder,
                 "source": source,
+                "rag_mode": rag_mode,
+                "sources": rag_sources,
             },
         )
 
@@ -1041,8 +1174,13 @@ def chat_stream():
             yield sse_event("delta", {"content": streamed_answer})
         else:
             try:
+                messages = (
+                    build_rag_messages(state, scene, structured_mode, rag_context)
+                    if rag_mode
+                    else build_messages(state, scene, structured_mode)
+                )
                 for content in iter_deepseek_content(
-                    build_messages(state, scene, structured_mode),
+                    messages,
                     structured_mode=structured_mode,
                 ):
                     raw_content += content
@@ -1088,6 +1226,8 @@ def chat_stream():
                 "session_id": session_id,
                 "scene_reminder": scene_reminder,
                 "source": source,
+                "rag_mode": rag_mode,
+                "sources": rag_sources,
             },
         )
 
@@ -1099,6 +1239,42 @@ def chat_stream():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.route("/ask", methods=["POST"])
+def ask_knowledge_base():
+    auth_error = require_login_json()
+    if auth_error:
+        return auth_error
+
+    request_data = request.get_json(silent=True) or {}
+    question = str(request_data.get("question", "")).strip()
+    top_k = int(request_data.get("top_k", 3) or 3)
+
+    if not question:
+        return jsonify({"error": "question 不能为空"}), 400
+    if API_KEY == "yourapi":
+        return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
+
+    try:
+        rag_context, rag_sources = prepare_rag_context(question, top_k=top_k)
+        response_data = call_deepseek(
+            [
+                {
+                    "role": "system",
+                    "content": f"{RAG_SYSTEM_PROMPT}\n\n【知识库检索片段】\n{rag_context}",
+                },
+                {"role": "user", "content": question},
+            ],
+            structured_mode=False,
+        )
+    except RagNotReadyError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except requests.RequestException as exc:
+        return jsonify({"error": f"DeepSeek API 调用失败: {exc}"}), 502
+
+    answer = response_data["choices"][0]["message"]["content"].strip()
+    return jsonify({"answer": answer, "sources": rag_sources})
 
 
 @app.route("/reset", methods=["POST"])

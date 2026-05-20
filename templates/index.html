@@ -597,6 +597,14 @@
             </div>
 
             <div class="control-group">
+                <label>知识库</label>
+                <div class="switch">
+                    <span>知识库增强回答</span>
+                    <input type="checkbox" id="rag-mode">
+                </div>
+            </div>
+
+            <div class="control-group">
                 <label>机制说明</label>
                 <p class="helper-text">系统会保留最近多轮消息，并在历史过长时自动压缩成摘要，避免上下文无限膨胀。</p>
             </div>
@@ -604,6 +612,7 @@
             <div class="button-row">
                 <button class="primary" type="button" onclick="toggleTheme()">暗 / 亮</button>
                 <button class="secondary" type="button" onclick="resetChat()">重置会话</button>
+                <button class="secondary" type="button" onclick="openProfile()">个人资料</button>
                 <button class="secondary" type="button" onclick="logout()">退出</button>
             </div>
 
@@ -658,6 +667,7 @@
         const input = document.getElementById("message");
         const sceneSelect = document.getElementById("scene");
         const structuredModeToggle = document.getElementById("structured-mode");
+        const ragModeToggle = document.getElementById("rag-mode");
         const statusText = document.getElementById("status");
         const sendButton = document.getElementById("send-button");
         const sessionList = document.getElementById("session-list");
@@ -709,7 +719,13 @@
             hasSummary = false,
             sceneReminder = ""
         } = {}) {
-            mechanismSource.innerText = source === "local_faq" ? "本地 FAQ / 规则命中" : source === "deepseek" ? "DeepSeek API" : "等待触发";
+            mechanismSource.innerText = source === "local_faq"
+                ? "本地 FAQ / 规则命中"
+                : source === "deepseek"
+                    ? "DeepSeek API"
+                    : source === "knowledge_base"
+                        ? "本地知识库 + DeepSeek"
+                        : "等待触发";
             mechanismStructured.innerText = structuredMode ? "已开启" : "未开启";
             mechanismSummary.innerText = hasSummary ? "已启用" : "未启用";
             mechanismScene.innerText = sceneReminder ? "已触发" : "未触发";
@@ -779,7 +795,7 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        function appendBotExtras(message, metadata = null, sceneReminder = "", source = "") {
+        function appendBotExtras(message, metadata = null, sceneReminder = "", source = "", sources = []) {
             if (metadata) {
                 const meta = document.createElement("div");
                 meta.className = "structured-meta";
@@ -802,10 +818,20 @@
                 message.appendChild(reminder);
             }
 
-            if (source === "local_faq") {
+            if (sources.length) {
+                const sourceBox = document.createElement("div");
+                sourceBox.className = "structured-meta";
+                sourceBox.innerHTML = `
+                    <div><strong>引用来源：</strong></div>
+                    ${sources.map((item) => `<div>- ${escapeHtml(String(item.source))}，chunk_id：${escapeHtml(String(item.chunk_id))}</div>`).join("")}
+                `;
+                message.appendChild(sourceBox);
+            }
+
+            if (source === "local_faq" || source === "knowledge_base") {
                 const badge = document.createElement("div");
                 badge.className = "source-badge";
-                badge.innerText = "本地 FAQ 命中";
+                badge.innerText = source === "local_faq" ? "本地 FAQ 命中" : "知识库增强";
                 message.appendChild(badge);
             }
 
@@ -842,7 +868,8 @@
                     body: JSON.stringify({
                         message: userText,
                         scene: sceneSelect.value,
-                        structured_mode: structuredModeToggle.checked
+                        structured_mode: structuredModeToggle.checked,
+                        rag_mode: ragModeToggle.checked
                     })
                 });
 
@@ -893,7 +920,8 @@
                                 botMessage,
                                 data.structured_mode ? data.structured : null,
                                 data.scene_reminder || "",
-                                data.source || ""
+                                data.source || "",
+                                data.sources || []
                             );
                             updateMechanismPanel({
                                 source: data.source || "",
@@ -932,6 +960,10 @@
         async function logout() {
             await fetch("/auth/logout", { method: "POST" });
             window.location.href = "/auth";
+        }
+
+        function openProfile() {
+            window.location.href = "/profile";
         }
 
         function renderSessions(sessions) {
@@ -1026,7 +1058,7 @@
         sceneSelect.addEventListener("change", updatePlaceholder);
         structuredModeToggle.addEventListener("change", () => {
             updateMechanismPanel({
-                source: mechanismSource.innerText === "本地 FAQ / 规则命中" ? "local_faq" : mechanismSource.innerText === "DeepSeek API" ? "deepseek" : "",
+                source: mechanismSource.innerText === "本地 FAQ / 规则命中" ? "local_faq" : mechanismSource.innerText === "DeepSeek API" ? "deepseek" : mechanismSource.innerText === "本地知识库 + DeepSeek" ? "knowledge_base" : "",
                 structuredMode: structuredModeToggle.checked,
                 hasSummary: mechanismSummary.innerText === "已启用",
                 sceneReminder: mechanismScene.innerText === "已触发" ? "triggered" : ""

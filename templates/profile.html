@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人资料 - 学习场景智能问答助手</title>
+    <style>
+        :root {
+            --bg: #f3efe7;
+            --panel: #fffaf2;
+            --text: #1d1a16;
+            --muted: #6b6257;
+            --accent: #bf5a2b;
+            --accent-dark: #93411c;
+            --line: rgba(54, 42, 28, 0.12);
+            --danger: #b42318;
+            --success: #177245;
+            --shadow: 0 18px 55px rgba(91, 64, 33, 0.14);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(191, 90, 43, 0.18), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(49, 97, 140, 0.16), transparent 24%),
+                linear-gradient(135deg, #efe2cf 0%, var(--bg) 52%, #e6ddd2 100%);
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+
+        .profile-card {
+            width: min(480px, 100%);
+            padding: 32px;
+            border-radius: 22px;
+            background: rgba(255, 250, 242, 0.94);
+            border: 1px solid var(--line);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+        }
+
+        .top-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+            margin-bottom: 24px;
+        }
+
+        .eyebrow {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(191, 90, 43, 0.12);
+            color: var(--accent-dark);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        h1 {
+            margin: 16px 0 8px;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .back-link {
+            color: var(--accent-dark);
+            font-weight: 700;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+
+        .avatar-area {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 18px;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fffdf8;
+        }
+
+        .avatar-preview {
+            width: 82px;
+            height: 82px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(191, 90, 43, 0.25);
+            background: #f3efe7;
+            flex: 0 0 auto;
+        }
+
+        .avatar-actions {
+            min-width: 0;
+        }
+
+        .avatar-actions button {
+            width: auto;
+            padding: 10px 13px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        .avatar-actions span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: #fffdf8;
+            color: var(--text);
+            padding: 13px 14px;
+            font-size: 15px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .readonly {
+            color: var(--muted);
+            line-height: 1.7;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(54, 42, 28, 0.05);
+            border: 1px solid var(--line);
+        }
+
+        .primary {
+            width: 100%;
+            margin-top: 4px;
+            border: none;
+            border-radius: 14px;
+            padding: 13px 16px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 700;
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .primary:disabled {
+            cursor: not-allowed;
+            opacity: 0.65;
+        }
+
+        .message {
+            display: none;
+            margin: 0 0 14px;
+            padding: 11px 12px;
+            border-radius: 12px;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        .message.error {
+            display: block;
+            color: var(--danger);
+            background: rgba(180, 35, 24, 0.09);
+            border: 1px solid rgba(180, 35, 24, 0.18);
+        }
+
+        .message.success {
+            display: block;
+            color: var(--success);
+            background: rgba(23, 114, 69, 0.09);
+            border: 1px solid rgba(23, 114, 69, 0.18);
+        }
+    </style>
+</head>
+
+<body>
+    <main class="profile-card">
+        <div class="top-row">
+            <div>
+                <span class="eyebrow">个人中心</span>
+                <h1>个人资料</h1>
+                <p class="subtitle">修改头像和昵称后，聊天界面会使用新的展示信息。</p>
+            </div>
+            <a class="back-link" href="/">返回对话</a>
+        </div>
+
+        <div id="form-message" class="message"></div>
+
+        <form id="profile-form">
+            <div class="avatar-area">
+                <img class="avatar-preview" id="avatar-preview" src="{{ current_user.avatar_url or default_avatar }}" alt="头像预览">
+                <div class="avatar-actions">
+                    <button type="button" id="choose-avatar">更换头像</button>
+                    <span id="avatar-name">未选择新头像</span>
+                    <input type="file" id="avatar-input" accept="image/jpeg,image/png,image/webp">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="nickname">昵称</label>
+                <input type="text" id="nickname" value="{{ current_user.nickname }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>邮箱</label>
+                <div class="readonly">{{ current_user.email }}</div>
+            </div>
+
+            <div class="form-group">
+                <label>用户名</label>
+                <div class="readonly">{{ current_user.username }}</div>
+            </div>
+
+            <button class="primary" id="submit-btn" type="submit">保存修改</button>
+        </form>
+    </main>
+
+    <script>
+        const form = document.getElementById("profile-form");
+        const submitButton = document.getElementById("submit-btn");
+        const formMessage = document.getElementById("form-message");
+        const chooseAvatar = document.getElementById("choose-avatar");
+        const avatarInput = document.getElementById("avatar-input");
+        const avatarPreview = document.getElementById("avatar-preview");
+        const avatarName = document.getElementById("avatar-name");
+        const nicknameInput = document.getElementById("nickname");
+        let selectedAvatar = null;
+
+        function setMessage(text, type = "error") {
+            formMessage.className = `message ${type}`;
+            formMessage.innerText = text;
+        }
+
+        function clearMessage() {
+            formMessage.className = "message";
+            formMessage.innerText = "";
+        }
+
+        async function requestForm(url, formData) {
+            const response = await fetch(url, {
+                method: "POST",
+                body: formData
+            });
+            const responseText = await response.text();
+            let data = {};
+
+            try {
+                data = responseText ? JSON.parse(responseText) : {};
+            } catch (error) {
+                throw new Error(`后端返回了非 JSON 内容，状态码：${response.status}`);
+            }
+
+            if (!response.ok) {
+                throw new Error(data.error || "请求失败");
+            }
+            return data;
+        }
+
+        chooseAvatar.onclick = () => {
+            avatarInput.click();
+        };
+
+        avatarInput.onchange = () => {
+            const file = avatarInput.files[0];
+            if (!file) return;
+            if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                setMessage("头像仅支持 JPG、PNG 或 WebP 格式");
+                avatarInput.value = "";
+                selectedAvatar = null;
+                return;
+            }
+            if (file.size > 2 * 1024 * 1024) {
+                setMessage("头像文件不能超过 2MB");
+                avatarInput.value = "";
+                selectedAvatar = null;
+                return;
+            }
+            selectedAvatar = file;
+            avatarName.innerText = file.name;
+            avatarPreview.src = URL.createObjectURL(file);
+            clearMessage();
+        };
+
+        form.onsubmit = async (event) => {
+            event.preventDefault();
+            clearMessage();
+            submitButton.disabled = true;
+
+            const formData = new FormData();
+            formData.append("nickname", nicknameInput.value.trim());
+            if (selectedAvatar) {
+                formData.append("avatar", selectedAvatar, selectedAvatar.name);
+            }
+
+            try {
+                await requestForm("/profile/update", formData);
+                selectedAvatar = null;
+                avatarInput.value = "";
+                avatarName.innerText = "未选择新头像";
+                setMessage("个人资料已更新。", "success");
+            } catch (error) {
+                setMessage(error.message);
+            } finally {
+                submitButton.disabled = false;
+            }
+        };
+    </script>
+</body>
+
+</html>
