@@ -482,6 +482,18 @@
             min-height: 52px;
         }
 
+        #voice-button {
+            min-width: 56px;
+            min-height: 52px;
+            font-size: 18px;
+        }
+
+        #voice-button.listening {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
         pre code {
             display: block;
             overflow-x: auto;
@@ -562,7 +574,8 @@
                 flex-direction: column;
             }
 
-            #send-button {
+            #send-button,
+            #voice-button {
                 width: 100%;
             }
         }
@@ -667,6 +680,7 @@
 
             <div class="input-area">
                 <input type="text" id="message" placeholder="例如：用通俗语言解释一下进程和线程的区别，并给一个 Java 示例" onkeydown="handleKey(event)" />
+                <button class="secondary" id="voice-button" type="button" onclick="toggleVoiceInput()" title="语音输入">🎤</button>
                 <button class="primary" id="send-button" type="button" onclick="sendMessage()">发送</button>
             </div>
         </main>
@@ -680,6 +694,7 @@
         const ragModeToggle = document.getElementById("rag-mode");
         const statusText = document.getElementById("status");
         const sendButton = document.getElementById("send-button");
+        const voiceButton = document.getElementById("voice-button");
         const sessionList = document.getElementById("session-list");
         const mechanismSource = document.getElementById("mechanism-source");
         const mechanismStructured = document.getElementById("mechanism-structured");
@@ -699,6 +714,8 @@
             project: "例如：帮我设计一个学生管理系统，说明功能模块、技术选型和实施步骤"
         };
         let currentSessionId = null;
+        let recognition = null;
+        let isListening = false;
 
         function escapeHtml(value) {
             return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -859,6 +876,74 @@
                 event: eventLine ? eventLine.slice(6).trim() : "message",
                 data: dataLines.length ? JSON.parse(dataLines.join("\n")) : {}
             };
+        }
+
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (!SpeechRecognition) {
+                statusText.innerText = "当前浏览器不支持语音识别，请使用 Chrome 或 Edge。";
+                alert("当前浏览器不支持语音识别，请使用 Chrome 或 Edge 浏览器。");
+                return null;
+            }
+
+            const recognizer = new SpeechRecognition();
+            recognizer.lang = "zh-CN";
+            recognizer.continuous = false;
+            recognizer.interimResults = true;
+
+            recognizer.onstart = () => {
+                isListening = true;
+                voiceButton.classList.add("listening");
+                voiceButton.innerText = "■";
+                statusText.innerText = "正在听你说话...";
+            };
+
+            recognizer.onresult = (event) => {
+                let finalText = "";
+                let interimText = "";
+
+                for (let index = event.resultIndex; index < event.results.length; index++) {
+                    const text = event.results[index][0].transcript;
+                    if (event.results[index].isFinal) {
+                        finalText += text;
+                    } else {
+                        interimText += text;
+                    }
+                }
+
+                input.value = finalText || interimText;
+            };
+
+            recognizer.onerror = (event) => {
+                statusText.innerText = `语音识别出错：${event.error}`;
+            };
+
+            recognizer.onend = () => {
+                isListening = false;
+                voiceButton.classList.remove("listening");
+                voiceButton.innerText = "🎤";
+                statusText.innerText = input.value.trim() ? "语音输入结束，可以修改后发送" : "语音输入结束";
+                input.focus();
+            };
+
+            return recognizer;
+        }
+
+        function toggleVoiceInput() {
+            if (!recognition) {
+                recognition = initSpeechRecognition();
+            }
+
+            if (!recognition) return;
+
+            if (isListening) {
+                recognition.stop();
+                return;
+            }
+
+            input.value = "";
+            recognition.start();
         }
 
         async function sendMessage() {
