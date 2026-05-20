@@ -17,7 +17,6 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
 
 API_URL = "https://api.deepseek.com/v1/chat/completions"
-API_KEY = os.getenv("DEEPSEEK_API_KEY", "yourapi")
 MODEL_NAME = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 MAX_RECENT_MESSAGES = 8
@@ -43,7 +42,14 @@ def handle_unexpected_error(error: Exception):
         if isinstance(error, HTTPException):
             return jsonify({"error": error.description}), error.code
         return jsonify({"error": f"服务器错误: {error}"}), 500
+    if isinstance(error, HTTPException):
+        return error
     raise error
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
 
 BASE_SYSTEM_PROMPT = """
 你是“面向计算机类大学生学习场景的智能问答助手”。
@@ -68,6 +74,25 @@ def get_db_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_deepseek_api_key() -> str:
+    return os.getenv("DEEPSEEK_API_KEY", "yourapi")
+
+
+def is_deepseek_api_key_configured() -> bool:
+    api_key = get_deepseek_api_key().strip()
+    return bool(api_key) and api_key != "yourapi"
+
+
+def format_deepseek_error(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None and response.status_code == 401:
+        return (
+            "DeepSeek API 鉴权失败（401）。请确认已经在启动 Flask 的同一个 PowerShell "
+            "窗口中设置了正确的 DEEPSEEK_API_KEY，然后重启 python app.py。"
+        )
+    return f"DeepSeek API 调用失败: {exc}"
 
 
 def init_db() -> None:
@@ -554,7 +579,7 @@ def call_deepseek(messages: List[Dict[str, str]], structured_mode: bool) -> Dict
         payload["response_format"] = {"type": "json_object"}
 
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {get_deepseek_api_key()}",
         "Content-Type": "application/json",
     }
 
@@ -580,7 +605,7 @@ def iter_deepseek_content(messages: List[Dict[str, str]], structured_mode: bool)
         payload["response_format"] = {"type": "json_object"}
 
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {get_deepseek_api_key()}",
         "Content-Type": "application/json",
     }
 
@@ -1028,7 +1053,7 @@ def chat():
         return jsonify({"error": "message 不能为空"}), 400
     if scene not in SCENE_PROMPTS:
         scene = "general"
-    if API_KEY == "yourapi":
+    if not is_deepseek_api_key_configured():
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
     scene_reminder = detect_scene_mismatch(user_input, scene)
     rag_context = ""
@@ -1071,7 +1096,7 @@ def chat():
             )
             raw_content = response_data["choices"][0]["message"]["content"]
         except requests.RequestException as exc:
-            return jsonify({"error": f"DeepSeek API 调用失败: {exc}"}), 502
+            return jsonify({"error": format_deepseek_error(exc)}), 502
 
         parsed_content = (
             safe_parse_structured_content(raw_content)
@@ -1119,7 +1144,7 @@ def chat_stream():
         return jsonify({"error": "message 不能为空"}), 400
     if scene not in SCENE_PROMPTS:
         scene = "general"
-    if API_KEY == "yourapi":
+    if not is_deepseek_api_key_configured():
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
 
     scene_reminder = detect_scene_mismatch(user_input, scene)
@@ -1193,7 +1218,7 @@ def chat_stream():
                         streamed_answer += delta
                         yield sse_event("delta", {"content": delta})
             except requests.RequestException as exc:
-                yield sse_event("error", {"error": f"DeepSeek API 调用失败: {exc}"})
+                yield sse_event("error", {"error": format_deepseek_error(exc)})
                 return
 
             parsed_content = (
@@ -1253,7 +1278,7 @@ def ask_knowledge_base():
 
     if not question:
         return jsonify({"error": "question 不能为空"}), 400
-    if API_KEY == "yourapi":
+    if not is_deepseek_api_key_configured():
         return jsonify({"error": "请先配置 DEEPSEEK_API_KEY 环境变量"}), 500
 
     try:
@@ -1271,7 +1296,7 @@ def ask_knowledge_base():
     except RagNotReadyError as exc:
         return jsonify({"error": str(exc)}), 500
     except requests.RequestException as exc:
-        return jsonify({"error": f"DeepSeek API 调用失败: {exc}"}), 502
+        return jsonify({"error": format_deepseek_error(exc)}), 502
 
     answer = response_data["choices"][0]["message"]["content"].strip()
     return jsonify({"answer": answer, "sources": rag_sources})

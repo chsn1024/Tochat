@@ -133,6 +133,17 @@
             border-radius: 16px;
             background: var(--panel-strong);
             border: 1px solid var(--line);
+            color: var(--text);
+            cursor: pointer;
+            text-align: left;
+            width: 100%;
+            transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .user-panel:hover {
+            transform: translateY(-1px);
+            border-color: rgba(191, 90, 43, 0.38);
+            box-shadow: inset 0 0 0 1px rgba(191, 90, 43, 0.18);
         }
 
         .panel-avatar {
@@ -571,13 +582,13 @@
                 <p>面向计算机类大学生，支持角色场景切换、多轮上下文管理与结构化输出。</p>
             </div>
 
-            <div class="user-panel">
+            <button class="user-panel" type="button" onclick="openProfile()" title="编辑账号信息">
                 <img class="panel-avatar" src="{{ current_user.avatar_url or default_ai_avatar }}" alt="用户头像">
                 <div class="user-meta">
                     <strong>{{ current_user.nickname }}</strong>
                     <span>{{ current_user.email }}</span>
                 </div>
-            </div>
+            </button>
 
             <div class="control-group">
                 <label for="scene">学习场景</label>
@@ -612,7 +623,6 @@
             <div class="button-row">
                 <button class="primary" type="button" onclick="toggleTheme()">暗 / 亮</button>
                 <button class="secondary" type="button" onclick="resetChat()">重置会话</button>
-                <button class="secondary" type="button" onclick="openProfile()">个人资料</button>
                 <button class="secondary" type="button" onclick="logout()">退出</button>
             </div>
 
