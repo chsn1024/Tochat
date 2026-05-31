@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import sqlite3
 import uuid
 from datetime import datetime
@@ -14,7 +15,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from rag_core import RagNotReadyError, build_context, format_sources, retrieve
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
+app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
 API_URL = "https://api.deepseek.com/v1/chat/completions"
 MODEL_NAME = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
@@ -77,12 +78,12 @@ def get_db_connection() -> sqlite3.Connection:
 
 
 def get_deepseek_api_key() -> str:
-    return os.getenv("DEEPSEEK_API_KEY", "yourapi")
+    return os.getenv("DEEPSEEK_API_KEY", "")
 
 
 def is_deepseek_api_key_configured() -> bool:
     api_key = get_deepseek_api_key().strip()
-    return bool(api_key) and api_key != "yourapi"
+    return bool(api_key)
 
 
 def format_deepseek_error(exc: requests.RequestException) -> str:
@@ -338,13 +339,34 @@ LOW_CONFIDENCE_HINTS = (
     "不确定",
 )
 
-MEDIUM_CONFIDENCE_HINTS = (
+WEAK_INPUT_HINTS = (
+    "未贴出",
+    "没贴出",
+    "不把代码贴出来",
+    "没有代码",
+    "没有题目",
+    "没有截图",
+)
+
+UNCERTAINTY_SOFTENERS = (
     "通常",
     "一般来说",
-    "建议你",
-    "可以先",
-    "优先考虑",
+    "可能",
+    "也许",
     "大概率",
+)
+
+ANSWER_SUBSTANCE_HINTS = (
+    "步骤",
+    "原因",
+    "示例",
+    "代码",
+    "复杂度",
+    "结论",
+    "建议",
+    "可以",
+    "需要",
+    "如下",
 )
 
 SCENE_KEYWORDS = {
@@ -382,6 +404,10 @@ SCENE_KEYWORDS = {
         "复习",
         "刷题",
         "知识点",
+        "题型",
+        "分数",
+        "备考",
+        "错题",
     ),
     "coding": (
         "代码",
@@ -398,6 +424,12 @@ SCENE_KEYWORDS = {
         "c++",
         "javascript",
         "sql",
+        "错误",
+        "失败",
+        "日志",
+        "启动",
+        "traceback",
+        "stack",
     ),
     "project": (
         "项目",
@@ -412,6 +444,11 @@ SCENE_KEYWORDS = {
         "实现",
         "功能",
         "流程图",
+        "原型",
+        "页面",
+        "业务",
+        "接口",
+        "数据库表",
     ),
 }
 
@@ -420,6 +457,39 @@ SCENE_GUIDANCE = {
     "exam": "当前场景更适合考试辅导。你可以把问题改成考点梳理、题型分析、真题讲解或复习规划。",
     "coding": "当前场景更适合代码调试与问题排查。你可以补充报错信息、代码片段、运行环境或预期结果。",
     "project": "当前场景更适合项目实践。你可以从需求分析、模块设计、技术选型、数据库设计或实施步骤来提问。",
+}
+
+SCENE_MISMATCH_MIN_CHARS = 8
+
+FAQ_INTENT_HINTS = (
+    "是什么",
+    "什么是",
+    "介绍",
+    "概念",
+    "区别",
+    "差异",
+)
+
+FAQ_COMPLEXITY_HINTS = (
+    "对比",
+    "比较",
+    "和",
+    "与",
+    "vs",
+    "优缺点",
+    "适合",
+    "为什么",
+    "怎么",
+    "如何",
+    "报错",
+    "代码",
+    "实现",
+    "项目",
+    "案例",
+)
+
+FAQ_KEYWORD_ALIASES = {
+    "什么是": ("什么是", "是什么"),
 }
 
 LOCAL_FAQ_RULES = [
@@ -696,16 +766,48 @@ def extract_streaming_answer_delta(buffer: str, cursor: int) -> Tuple[str, int]:
     return "".join(chars), index
 
 
+def strip_json_code_fence(raw_content: str) -> str:
+    content = raw_content.strip()
+    if not content.startswith("```"):
+        return content
+
+    lines = content.splitlines()
+    if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return content
+
+
+def extract_json_object(raw_content: str) -> str:
+    content = strip_json_code_fence(raw_content)
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return content
+    return content[start : end + 1]
+
+
 def safe_parse_structured_content(raw_content: str) -> Dict[str, str]:
-    try:
-        parsed = json.loads(raw_content)
-    except json.JSONDecodeError:
+    content = raw_content.strip()
+    if not content:
         return {
-            "answer": raw_content,
-            "summary": "模型未按 JSON 返回，已降级为普通文本。",
+            "answer": "模型未返回可显示的回答内容，请重试或关闭结构化输出后再提问。",
+            "summary": "模型返回内容为空。",
             "category": "其他",
             "confidence": "低",
         }
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        try:
+            parsed = json.loads(extract_json_object(content))
+        except json.JSONDecodeError:
+            return {
+                "answer": content,
+                "summary": "模型未按 JSON 返回，已降级为普通文本。",
+                "category": "其他",
+                "confidence": "低",
+            }
 
     answer = str(parsed.get("answer", "")).strip() or "模型未提供 answer 字段。"
     summary = str(parsed.get("summary", "")).strip() or "未生成摘要。"
@@ -730,45 +832,66 @@ def safe_parse_structured_content(raw_content: str) -> Dict[str, str]:
 def normalize_confidence(answer: str, confidence: str) -> str:
     answer_lower = answer.lower()
 
-    if any(hint in answer for hint in LOW_CONFIDENCE_HINTS):
+    if any(hint in answer for hint in LOW_CONFIDENCE_HINTS + WEAK_INPUT_HINTS):
         return "低"
 
-    if any(hint in answer for hint in MEDIUM_CONFIDENCE_HINTS):
-        return "中" if confidence == "高" else confidence
-
-    weak_input_signals = (
-        "未贴出",
-        "没贴出",
-        "不把代码贴出来",
-        "没有代码",
-        "没有题目",
-        "没有截图",
-    )
-    if any(hint in answer_lower for hint in weak_input_signals):
+    if any(hint.lower() in answer_lower for hint in WEAK_INPUT_HINTS):
         return "低"
+
+    has_softener = any(hint.lower() in answer_lower for hint in UNCERTAINTY_SOFTENERS)
+    has_substance = any(hint.lower() in answer_lower for hint in ANSWER_SUBSTANCE_HINTS)
+    if confidence == "高" and has_softener and not has_substance:
+        return "中"
 
     return confidence
 
 
 def detect_scene_mismatch(user_input: str, scene: str) -> str:
-    if scene not in SCENE_KEYWORDS:
+    if scene not in SCENE_KEYWORDS or scene == "general":
         return ""
 
     normalized_input = user_input.lower()
-    if any(keyword.lower() in normalized_input for keyword in SCENE_KEYWORDS[scene]):
+    compact_input = "".join(normalized_input.split())
+    if len(compact_input) < SCENE_MISMATCH_MIN_CHARS:
+        return ""
+
+    matched_scene_keywords = [
+        keyword for keyword in SCENE_KEYWORDS[scene]
+        if keyword.lower() in normalized_input
+    ]
+    if matched_scene_keywords:
         return ""
 
     return (
         f"当前选择的是“{SCENE_PROMPTS[scene]['label']}”，"
-        "但这条提问与该学习场景的关联度较弱。"
+        "但这条提问暂时没有明显命中该场景的关键词。"
         f"{SCENE_GUIDANCE[scene]}"
     )
 
 
+def faq_keyword_matches(keyword: str, normalized_input: str) -> bool:
+    aliases = FAQ_KEYWORD_ALIASES.get(keyword, (keyword,))
+    return any(alias in normalized_input for alias in aliases)
+
+
 def match_local_faq(user_input: str) -> Dict[str, str]:
-    normalized_input = user_input.lower().replace(" ", "")
+    normalized_input = "".join(user_input.lower().split())
     for rule in LOCAL_FAQ_RULES:
-        if all(keyword.lower().replace(" ", "") in normalized_input for keyword in rule["keywords"]):
+        keywords = tuple(keyword.lower().replace(" ", "") for keyword in rule["keywords"])
+        if not all(faq_keyword_matches(keyword, normalized_input) for keyword in keywords):
+            continue
+
+        has_faq_intent = any(hint in normalized_input for hint in FAQ_INTENT_HINTS)
+        allowed_complexity_hints = set()
+        if "区别" in keywords or "差异" in keywords:
+            allowed_complexity_hints.update({"和", "与", "vs", "对比", "比较"})
+        has_extra_complexity = any(
+            hint in normalized_input
+            and hint not in keywords
+            and hint not in allowed_complexity_hints
+            for hint in FAQ_COMPLEXITY_HINTS
+        )
+        if has_faq_intent and not has_extra_complexity:
             return dict(rule["structured"])
     return {}
 
